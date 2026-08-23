@@ -15,7 +15,10 @@ const classify = (text: string) => {
 export async function POST(request: Request) {
   const body = await request.json(); const situation = String(body.situation || "").trim();
   if (crisis.test(situation)) return NextResponse.json({ safeMode: true, message: "你描述的情况可能涉及现实安全风险。请优先联系可信赖的人、当地紧急服务或专业支持；这里暂不把它改编成游戏故事。" }, { status: 422 });
-  if (situation.length < 12 || situation.length > 500) return NextResponse.json({ error: "请用12—500字描述处境" }, { status: 400 });
+  // Floor kept tiny (4): mobile users type short descriptions, and a silently
+  // disabled button below 12 chars was the top mobile complaint. 4 still blocks
+  // empty/one-char junk before it reaches the paid LLM.
+  if (situation.length < 4 || situation.length > 500) return NextResponse.json({ error: "请用4—500字描述处境" }, { status: 400 });
   const clamp = (value: unknown, fallback: number) => Math.min(5, Math.max(1, Number(value) || fallback));
   const storyPreferences = {
     difficulty: clamp(body.preferences?.difficulty, 3),

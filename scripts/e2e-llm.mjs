@@ -92,7 +92,18 @@ async function main() {
     // ---- create ----
     log("create: fill form and submit");
     await page.goto(`${BASE}/create`, { waitUntil: "networkidle0" });
+    // Short input must stay visibly blocked (button disabled + hint), not silently dead.
+    await page.type("textarea.field.textarea", "被裁");
+    const blocked = await page.$eval("button.primary.dark-button.full", (button) => button.disabled);
+    assert(blocked, "generate button should be disabled below 4 chars");
+    const hint = await page.$$eval(".form-error", (els) => els.some((el) => el.textContent.includes("至少 4 个字")));
+    assert(hint, "short-input hint not shown");
+    await page.focus("textarea.field.textarea");
+    await page.keyboard.down("Meta"); await page.keyboard.press("KeyA"); await page.keyboard.up("Meta");
+    await page.keyboard.press("Backspace");
     await page.type("textarea.field.textarea", "我最近被裁员了，投递了很多简历都没有回音，存款只够撑四个月，很焦虑，不知道该继续找同类工作还是换方向。");
+    const enabled = await page.$eval("button.primary.dark-button.full", (button) => !button.disabled);
+    assert(enabled, "generate button should be enabled at 4+ chars");
     await page.click("button.primary.dark-button.full");
     await page.waitForFunction(() => location.pathname.startsWith("/prepare"), { timeout: 30000 });
     log("create OK → prepare");

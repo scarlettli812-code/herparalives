@@ -26,7 +26,7 @@ export default function CreatePage() {
   const [error, setError] = useState("");
 
   const submit = async () => {
-    if (situation.trim().length < 12) return;
+    if (situation.trim().length < 4) return;
     setBusy(true); setError("");
     try {
       const response = await fetch("/api/characters/generate", {
@@ -66,7 +66,8 @@ export default function CreatePage() {
       <p className="preference-note">这些选择会转化为故事生成约束，不代表人生难易，也不会制造“正确答案”。</p>
       <div className="story-sliders">{preferenceConfig.map((item) => <label key={item.key}><div><b>{item.label}</b><output>{preferences[item.key]}/5</output></div><input type="range" min="1" max="5" step="1" value={preferences[item.key]} onChange={(event) => setPreferences({ ...preferences, [item.key]: Number(event.target.value) })} /><small><span>{item.low}</span><span>{item.high}</span></small></label>)}</div>
       {error && <p className="form-error">{error}</p>}
-      <button disabled={situation.trim().length < 12 || busy} onClick={submit} className="primary dark-button full">{busy ? "正在生成脱敏角色卡…" : "生成我的平行角色"}</button>
+      {!error && situation.trim().length > 0 && situation.trim().length < 4 && <p className="form-error">再写几笔，至少 4 个字就能生成角色卡</p>}
+      <button disabled={situation.trim().length < 4 || busy} onClick={submit} className="primary dark-button full">{busy ? "正在生成脱敏角色卡…" : "生成我的平行角色"}</button>
     </div><aside className="character-preview"><Portrait id={portrait} /><div><small>即将成为</small><h3>{name || "未命名的她"}</h3><p>{situation ? "她的故事将从一个真实但已被改写的困境开始。" : "选择形象、写下处境，再决定故事的气质。"}</p><div className="preference-chips"><span>难度 {preferences.difficulty}</span><span>冲突 {preferences.conflict}</span><span>戏剧 {preferences.drama}</span><span>真实 {preferences.realism}</span></div></div></aside></section>
   </main>;
 }
