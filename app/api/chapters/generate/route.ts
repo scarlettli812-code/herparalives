@@ -6,7 +6,18 @@ import {
   buildMemorySummary,
   rewriteNodeIds,
 } from "@/server/story-generation";
-import type { CharacterCard, ChoiceRecord, StoryNode, StoryPlan, StoryPreferences } from "@/lib/types";
+import { attachCallbackIds, validateChapterContinuity } from "@/server/state-validator";
+import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
+import type {
+  CharacterCard,
+  ChoiceRecord,
+  StoryBible,
+  StoryEvent,
+  StoryNode,
+  StoryPlan,
+  StoryPreferences,
+  StoryState,
+} from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -17,6 +28,10 @@ type Body = {
   targetChapter?: number;
   memory?: ChoiceRecord[];
   lastNode?: StoryNode;
+  story?: StoryNode[];
+  storyBible?: StoryBible;
+  storyState?: StoryState;
+  eventLedger?: StoryEvent[];
 };
 
 export async function POST(request: Request) {
@@ -29,17 +44,27 @@ export async function POST(request: Request) {
   if (!llmConfigured()) return NextResponse.json({ error: "no_key" }, { status: 503 });
 
   const memory = body.memory ?? [];
-  const lastChoiceRecord = [...memory].reverse().find((record) => record.nodeId === lastNode.id);
-  const lastChoiceInNode = lastChoiceRecord
-    ? lastNode.choices?.find((choice) => choice.id === lastChoiceRecord.choiceId)
+  const storySoFar = body.story?.length ? body.story : [lastNode];
+  const lastChoiceRecord = [...memory].reverse()[0];
+  const lastChoiceNode = lastChoiceRecord
+    ? storySoFar.find((node) => node.id === lastChoiceRecord.nodeId)
     : undefined;
-  const memorySummary = buildMemorySummary(memory, [lastNode]);
+  const lastChoiceInNode = lastChoiceRecord
+    ? lastChoiceNode?.choices?.find((choice) => choice.id === lastChoiceRecord.choiceId)
+    : undefined;
+  const memorySummary = buildMemorySummary(memory, storySoFar);
+  const storyState = body.storyState ?? body.storyBible?.worldState ?? createInitialStoryState();
+  const storyBible = body.storyBible ?? createInitialStoryBible(character, storyState);
+  const eventLedger = body.eventLedger ?? [];
   const prompt = buildChapterPrompt({
     character,
     constraints: character.promptConstraints ?? [],
     plan,
     targetChapter,
     memorySummary,
+    storyBible,
+    storyState,
+    eventLedger,
     lastNode,
     lastChoice: lastChoiceRecord
       ? { choiceLabel: lastChoiceRecord.choiceLabel, memory: lastChoiceRecord.memory }
@@ -54,7 +79,7 @@ export async function POST(request: Request) {
   });
   if (!result.ok) return NextResponse.json({ error: "generate_failed" }, { status: 502 });
 
-  const story = rewriteNodeIds(result.data.story, crypto.randomUUID().slice(0, 8));
+  let story = rewriteNodeIds(result.data.story, crypto.randomUUID().slice(0, 8));
   if (story.some((node) => node.chapter !== targetChapter)) {
     return NextResponse.json({ error: "generate_failed" }, { status: 502 });
   }
@@ -72,5 +97,16 @@ export async function POST(request: Request) {
             return rest;
           });
   }
-  return NextResponse.json({ story });
+  const validation = validateChapterContinuity({
+    story,
+    callbacks: result.data.callbacks,
+    eventLedger,
+    targetChapter,
+  });
+  if (!validation.ok) {
+    console.error(`[chapters] continuity validation failed: ${validation.errors.join(" | ")}`);
+    return NextResponse.json({ error: "continuity_failed", details: validation.errors }, { status: 502 });
+  }
+  story = attachCallbackIds(story, result.data.callbacks);
+  return NextResponse.json({ story, callbacks: result.data.callbacks });
 }

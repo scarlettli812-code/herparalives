@@ -29,6 +29,11 @@ export type StoryEvent = {
   realizedEvidence?: string;
 };
 
+export type StoryCallback = {
+  eventId: string;
+  evidence: string;
+};
+
 export type StoryCharacterFact = {
   id: string;
   name: string;

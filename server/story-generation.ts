@@ -1,6 +1,15 @@
 import "server-only";
 import { z } from "zod";
-import type { CharacterCard, ChoiceRecord, StoryNode, StoryPreferences, StoryPlan } from "@/lib/types";
+import type {
+  CharacterCard,
+  ChoiceRecord,
+  StoryBible,
+  StoryEvent,
+  StoryNode,
+  StoryPreferences,
+  StoryPlan,
+  StoryState,
+} from "@/lib/types";
 import { STORY_EDITOR_PROMPT } from "@/server/story-editor-prompt";
 
 // Prompt builders, zod schemas and node-id rewriting for LLM story generation.
@@ -19,6 +28,14 @@ const deltasSchema = z
   .record(z.enum(STAT_KEYS), nullable(z.number().int().min(-3).max(3)))
   .default(EMPTY_DELTAS);
 
+const storyDomainSchema = z.enum(["career", "economy", "relationship", "selfFulfillment"]);
+const storyEffectSchema = z.object({
+  domain: storyDomainSchema,
+  from: nullable(z.string().min(2).max(100)),
+  to: z.string().min(2).max(100),
+  consequence: z.string().min(4).max(120),
+}).strict();
+
 const choiceSchema = z.object({
   id: z.string().min(1),
   // Caps are deliberately loose: a single field a couple chars over the target
@@ -32,6 +49,10 @@ const choiceSchema = z.object({
   outcome: z.string().min(100).max(1500),
   deltas: deltasSchema,
   memory: z.string().min(4).max(60),
+  effects: z.array(storyEffectSchema).min(2).max(3),
+  pathType: z.enum(["local", "branch", "delay", "exit", "evidence"]),
+  expectedConsequence: z.string().min(8).max(120),
+  consequenceDueInChapters: z.number().int().min(1).max(3),
   nextNodeId: nullable(z.string()),
   endsStory: nullable(z.boolean()),
 });
@@ -46,6 +67,7 @@ export const nodeSchema = z
     dialogue: nullable(z.string()),
     coach: nullable(z.string().min(1).max(500)),
     chapterEnd: nullable(z.boolean()),
+    causedByEventIds: nullable(z.array(z.string().min(1)).max(6)),
     // Choices belong to decision nodes only — pure narration nodes omit the key
     // entirely. Models occasionally emit 2 choices instead of 3 — accept it
     // rather than rejecting a whole run (the UI renders any count).
@@ -90,6 +112,10 @@ export const SEASON_RESULT_SCHEMA = z
 export const CHAPTER_RESULT_SCHEMA = z
   .object({
     story: z.array(nodeSchema).min(2).max(3),
+    callbacks: z.array(z.object({
+      eventId: z.string().min(1),
+      evidence: z.string().min(4).max(120),
+    }).strict()).max(6),
   })
   .refine(hasDecisionNode, { message: "each chapter must include a decision node" });
 
@@ -151,10 +177,17 @@ const EXAMPLE_NODE = `{
         "unknown": "（未说破的不确定因素，4—48字）",
         "outcome": "（选后剧情：180—450字完整故事，至少两段，写清行动、回应、代价与下一幕悬念，禁止一两句带过）",
         "deltas": { "career": 1, "happiness": -1 },
-        "memory": "（这一选择值得被记住的一句话，4—60字）"
+        "memory": "（这一选择值得被记住的一句话，4—60字）",
+        "effects": [
+          { "domain": "career", "from": "（选择前职业状态）", "to": "（选择后职业状态）", "consequence": "（后续可被场景明确呈现的职业后果）" },
+          { "domain": "selfFulfillment", "from": "（选择前自主感）", "to": "（选择后自主感）", "consequence": "（后续可被场景明确呈现的自我满足后果）" }
+        ],
+        "pathType": "branch",
+        "expectedConsequence": "（未来1—3章内必须明确出现的可观察后果）",
+        "consequenceDueInChapters": 1
       },
-      { "id": "c2", "label": "…", "hint": "…", "gain": "…", "cost": "…", "unknown": "…", "outcome": "…", "deltas": { }, "memory": "…" },
-      { "id": "c3", "label": "…", "hint": "…", "gain": "…", "cost": "…", "unknown": "…", "outcome": "…", "deltas": { }, "memory": "…" }
+      { "id": "c2", "label": "…", "hint": "…", "gain": "…", "cost": "…", "unknown": "…", "outcome": "…", "deltas": { }, "memory": "…", "effects": [ { "domain": "economy", "to": "…", "consequence": "…" }, { "domain": "relationship", "to": "…", "consequence": "…" } ], "pathType": "delay", "expectedConsequence": "…", "consequenceDueInChapters": 2 },
+      { "id": "c3", "label": "…", "hint": "…", "gain": "…", "cost": "…", "unknown": "…", "outcome": "…", "deltas": { }, "memory": "…", "effects": [ { "domain": "career", "to": "…", "consequence": "…" }, { "domain": "relationship", "to": "…", "consequence": "…" } ], "pathType": "exit", "expectedConsequence": "…", "consequenceDueInChapters": 1 }
     ]
   }`;
 
@@ -182,6 +215,7 @@ const SEASON_TASK = [
   `禁止在无关紧要的细节上设置选项——先做哪件事、买不买东西、回不回消息这类都不算关键抉择点。每章必须至少包含 1 个抉择节点，其余为纯叙事节点。`,
   `【类型铁律】每个值必须保持自己的类型：plan.items 的每一项必须是对象；deltas 必须是对象；scene、outcome、label 等必须是字符串。严禁把对象或数组压缩成 "chapter: 1, title: …" 这样的字符串。节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
   `【节点规则】nodes 只写第一章，chapter 全为 1，共 1—2 个节点；最后一个节点 chapterEnd 必须为 true（其余节点为 false）且带 20 字以上的 coach；第一章所有选项禁止出现 nextNodeId 字段（后续章节由系统按你的 plan 续写）；deltas 使用 career / wisdom / happiness / relationship / courage 五个键，值为 -3 到 3 的整数，未变化的维度可省略。`,
+  `【因果规则】每个选项必须绑定 2—3 个 effects，domain 只能是 career / economy / relationship / selfFulfillment；同时给出 pathType、expectedConsequence 和 1—3 章内兑现期限。effects.to 必须写成选择后已经成立的具体状态，consequence 必须能在后续场景中被角色行动、对话或资源变化明确证明。`,
   `【正文要求】scene 按编辑规范写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
 ].join("\n");
 
@@ -212,6 +246,9 @@ export type ChapterInput = {
   plan: StoryPlan;
   targetChapter: number;
   memorySummary: string;
+  storyBible: StoryBible;
+  storyState: StoryState;
+  eventLedger: StoryEvent[];
   lastNode: StoryNode;
   lastChoice: Pick<ChoiceRecord, "choiceLabel" | "memory">;
   lastOutcome: string;
@@ -224,16 +261,18 @@ export function buildChapterPrompt(input: ChapterInput): { system: string; user:
     ``,
     `【本次任务】为已进行到第 ${input.targetChapter - 1} 章的《她的平行人生》续写第 ${input.targetChapter} 章（整季共 ${input.plan.chapters} 章）。本季故事大纲与已发生事件将在用户消息中给出。`,
     `【承接规则】`,
-    `1. 用户消息中的"已发生事件"是唯一事实来源：人物身份、关系、工作/经济/家庭状态、时间线必须与之一致，严禁出现与已选路线矛盾的事实（例如玩家拒绝了经济帮助，后续不得默认"她已接受帮助"）。`,
+    `1. 用户消息中的 Story Bible、当前 Story State、因果事件账本和已发生事件共同构成唯一事实来源：人物身份、关系、职业/经济/家庭状态、时间线必须与之一致，严禁出现与已选路线矛盾的事实（例如玩家拒绝了经济帮助，后续不得默认"她已接受帮助"）。`,
     `2. 开头必须自然衔接上一章结尾的场景与人物情绪，至少引用一次玩家上次选择的记忆内容。`,
     `3. 节点类型：本章输出 2—3 个节点，构成完整章节弧线，其中纯叙事节点（没有 choices 字段，只推进场景与情绪）与抉择节点（带 2—3 个选项）混合，每章必须至少包含 1 个抉择节点；选项只出现在真正的关键抉择点——方向选择、代价交换、关系转折、价值观取舍，禁止在无关紧要的细节上设置选项。最后一个节点 chapterEnd 必须为 true 且带 20 字以上的 coach；若它带选项，其全部选项禁止出现 nextNodeId。`,
     isFinal
       ? `4. 本章是第 ${input.plan.chapters} 章（最终章）：所有选项禁止出现 nextNodeId；若最后一个节点带选项，其全部选项必须带 "endsStory": true，为整季收束——给出有分量的结局与 Life Coach 回望。`
       : `4. 本章不是最终章：所有选项禁止出现 endsStory 字段。`,
-    `5. 输出格式：只输出 JSON，顶层只允许 "story" 一个键，禁止添加其他键。严格按下面的格式示例输出（示例中的"（…）"占位文字只是说明，实际内容必须完整真实；示例的 chapter 为 1，本次输出每个节点的 chapter 必须全部等于 ${input.targetChapter}；第一个示例是纯叙事节点——没有 choices 字段，第二个示例是抉择节点）：`,
-    `   { "story": [ ${EXAMPLE_PLAIN_NODE}, ${EXAMPLE_NODE} ] }`,
-    `6. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
-    `7. 正文要求：scene 写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
+    `5. 因果兑现：事件账本中 status=pending 的选择不能被忽略。每章至少明确兑现 1 个 pending 事件；所有 dueByChapter 小于等于本章的事件都必须在正文或 outcome 里明确出现。把兑现结果写入顶层 callbacks，eventId 必须原样复制，evidence 必须是从本章正文或 outcome 原样复制的 4—120 字证据；相关节点的 causedByEventIds 也要列出这些 eventId。`,
+    `6. 输出格式：只输出 JSON，顶层只允许 "story" 与 "callbacks" 两个键，禁止添加其他键。严格按下面的格式示例输出（示例中的"（…）"占位文字只是说明，实际内容必须完整真实；示例的 chapter 为 1，本次输出每个节点的 chapter 必须全部等于 ${input.targetChapter}；第一个示例是纯叙事节点——没有 choices 字段，第二个示例是抉择节点）：`,
+    `   { "story": [ ${EXAMPLE_PLAIN_NODE}, ${EXAMPLE_NODE} ], "callbacks": [ { "eventId": "（账本中的原始ID）", "evidence": "（从本章内容原样复制的证据）" } ] }`,
+    `7. 新选择也必须绑定 2—3 个 effects（career / economy / relationship / selfFulfillment），并给出 pathType、expectedConsequence 与 1—3 章内的 consequenceDueInChapters。`,
+    `8. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
+    `9. 正文要求：scene 写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
   ].join("\n");
   const user = [
     `角色卡：`,
@@ -259,7 +298,16 @@ export function buildChapterPrompt(input: ChapterInput): { system: string; user:
     `已发生事件（唯一事实来源）：`,
     input.memorySummary || "（暂无）",
     ``,
-    `请输出 JSON：{ "story": [ …第 ${input.targetChapter} 章的节点（2—3 个），末节点 chapterEnd 为 true … ] }`,
+    `Story Bible（不可改写的角色、世界与时间线）：`,
+    JSON.stringify(input.storyBible, null, 2),
+    ``,
+    `当前 Story State（后文必须从这些状态继续）：`,
+    JSON.stringify(input.storyState, null, 2),
+    ``,
+    `因果事件账本（pending 事件必须按期限兑现）：`,
+    JSON.stringify(input.eventLedger, null, 2),
+    ``,
+    `请输出 JSON：{ "story": [ …第 ${input.targetChapter} 章的节点（2—3 个），末节点 chapterEnd 为 true … ], "callbacks": [ … ] }`,
   ].join("\n");
   return { system, user };
 }
@@ -288,7 +336,7 @@ export function maxChapterNumber(nodes: StoryNode[]): number {
 export function buildMemorySummary(choices: ChoiceRecord[], nodes: StoryNode[]): string {
   const byNode = new Map(nodes.map((node) => [node.id, node]));
   return choices
-    .map((choice) => ({ chapter: byNode.get(choice.nodeId)?.chapter ?? 0, choice }))
+    .map((choice) => ({ chapter: choice.sourceChapter ?? byNode.get(choice.nodeId)?.chapter ?? 0, choice }))
     .filter((row) => row.chapter > 0)
     .sort((a, b) => a.chapter - b.chapter)
     .map(({ chapter, choice }) => `第${chapter}章：选择了「${choice.choiceLabel}」→ ${choice.memory.slice(0, 120)}`)
