@@ -1,6 +1,7 @@
 "use client";
 import { AppHeader } from "@/components/AppHeader";
 import { ScrollRevealText } from "@/components/ScrollRevealText";
+import { getPortrait } from "@/lib/portraits";
 import { applyStoryEffects, choiceRecordFromEvent, createStoryEvent, realizeEvents } from "@/lib/story-state";
 import { getRun, nodesForRun, saveRun } from "@/lib/store";
 import type { ChoiceRecord, GameRun, StatDelta, StoryCallback, StoryNode } from "@/lib/types";
@@ -15,6 +16,16 @@ const sumChapter = (records: ChoiceRecord[]) => records.reduce<StatDelta>((sum, 
 const iosDevice = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const scrollToTop = () => { const ios = iosDevice(); window.setTimeout(() => { if (ios) window.scrollTo(0, 0); else window.scrollTo({ top: 0, behavior: "smooth" }); }, 60); };
 
+function SceneArtwork({ src, alt }: { src: string; alt: string }) {
+  if (/^https?:\/\//.test(src)) {
+    // Wan result URLs are signed and hostnames vary by region, so they cannot be
+    // safely enumerated in next/image remotePatterns.
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt={alt} />;
+  }
+  return <Image src={src} alt={alt} fill priority sizes="(max-width: 760px) 100vw, 52vw" />;
+}
+
 export default function PlayPage() {
   const id = String(useParams().runId); const router = useRouter(); const [run, setRun] = useState<GameRun>();
   const [selectedChoiceId, setSelectedChoiceId] = useState<string>();
@@ -25,6 +36,7 @@ export default function PlayPage() {
   // the perceived wait drops to ~0. Still exactly one generation per chapter.
   const prefetchRef = useRef<{ chapter: number; finalNodeId: string; stateVersion: number; story: StoryNode[]; callbacks: StoryCallback[] } | null>(null);
   const prefetchPromiseRef = useRef<Promise<{ chapter: number; finalNodeId: string; stateVersion: number; story: StoryNode[]; callbacks: StoryCallback[] } | null> | null>(null);
+  const illustrationRequestsRef = useRef(new Set<number>());
   const lastIndexRef = useRef(0);
   useEffect(() => setRun(getRun(id)), [id]);
   const nodes = useMemo(() => run ? nodesForRun(run) : [], [run]); const current = run ? (nodes.find((node) => node.id === run.currentNodeId) ?? nodes[run.currentIndex]) : undefined;
@@ -63,6 +75,53 @@ export default function PlayPage() {
       }
     })();
   }, [run, current, nodes]);
+  useEffect(() => {
+    if (!run?.character.isCustom || !current || current.illustration) return;
+    const chapter = current.chapter;
+    const visualBrief = `${current.chapterTitle}｜${current.title}：${current.scene.slice(0, 240)}`;
+    const updateChapterVisual = (visual: NonNullable<StoryNode["visual"]>) => {
+      const latest = getRun(id);
+      if (!latest) return;
+      const next: GameRun = {
+        ...latest,
+        story: latest.story.map((node) => node.chapter === chapter && !node.illustration ? { ...node, visual } : node),
+        updatedAt: Date.now(),
+      };
+      saveRun(next);
+      setRun(next);
+    };
+    const readyVisual = nodes
+      .filter((node) => node.chapter === chapter)
+      .map((node) => node.visual)
+      .find((visual) => visual?.status === "ready" && visual.url && (visual.expiresAt ?? 0) > Date.now());
+    if (readyVisual) {
+      if (current.visual?.url !== readyVisual.url) updateChapterVisual(readyVisual);
+      return;
+    }
+    if (current.visual?.status === "generating" || current.visual?.status === "failed") return;
+    if (illustrationRequestsRef.current.has(chapter)) return;
+    illustrationRequestsRef.current.add(chapter);
+    updateChapterVisual({ referencePortraitId: run.character.portrait, visualBrief, status: "generating" });
+    void fetch("/api/illustrations/generate", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        portraitId: run.character.portrait,
+        characterName: run.character.name,
+        chapterTitle: current.chapterTitle,
+        sceneTitle: current.title,
+        scene: current.scene,
+      }),
+    }).then(async (response) => {
+      const result = await response.json() as { url?: string; expiresAt?: number; error?: string };
+      if (!response.ok || !result.url) throw new Error(result.error || "image_failed");
+      updateChapterVisual({ referencePortraitId: run.character.portrait, visualBrief, status: "ready", provider: "wan", url: result.url, expiresAt: result.expiresAt });
+    }).catch((error: unknown) => {
+      updateChapterVisual({ referencePortraitId: run.character.portrait, visualBrief, status: "failed", error: error instanceof Error ? error.message : "image_failed" });
+    }).finally(() => {
+      illustrationRequestsRef.current.delete(chapter);
+    });
+  }, [id, run?.character.isCustom, run?.character.name, run?.character.portrait, current, nodes]);
   if (!run || !current) return <main><AppHeader /><section className="prepare"><h2>这条旧线路已经更新</h2><p>故事结构已重写，请从角色大厅重新开始测试。</p><Link className="primary dark-button" href="/lobby#sample">返回测试故事</Link></section></main>;
 
   const savedChoice = run.choices.findLast((item) => item.nodeId === current.id);
@@ -184,7 +243,16 @@ export default function PlayPage() {
   const hasPrologue = run.presetId === "test-story";
   const chapterLabel = hasPrologue && current.chapter === 1 ? "PROLOGUE" : `CHAPTER ${hasPrologue ? current.chapter - 1 : current.chapter}`;
   const chapterDeltas = sumChapter(run.choices.filter((item) => nodes.find((storyNode) => storyNode.id === item.nodeId)?.chapter === current.chapter));
-  return <main className="play-page"><AppHeader compact /><div className="chapter-progress"><span>{current.chapterTitle} · 第 {sceneInChapter} 幕</span><div>{chapterNumbers.map((chapter) => <i className={chapter <= current.chapter ? "active" : ""} key={chapter} />)}</div><Link href={`/map/${run.id}`}>查看人生地图</Link></div><section className="story-stage"><div className="scene-art illustrated"><Image src={current.illustration || "/images/linan-ch1-v1.png"} alt={`${current.title}手绘剧情场景`} fill priority sizes="(max-width: 760px) 100vw, 52vw" /><div className="scene-vignette" /><small>关键场景 · 手绘叙事插画</small></div><article className="story-panel">{previous && run.currentIndex > 0 && <p className="memory-echo">人物记得：{previous.memory}</p>}<p className="scene-count">{chapterLabel} · SCENE {sceneInChapter}</p><h1>{current.title}</h1><ScrollRevealText className="scene-text rich-scene" text={current.scene} />{current.dialogue && <blockquote>{current.dialogue}</blockquote>}{!resolvedChoice && (current.choices?.length ?? 0) > 0 && <div className="choices"><p>故事走到这里，{run.character.name}准备如何回应？</p>{(current.choices ?? []).map((item, index) => <button onClick={() => choose(index)} key={item.id}><b>{String.fromCharCode(65 + index)}</b><span><strong>{item.label}</strong><small>{item.hint}</small></span><em>→</em></button>)}</div>}
+  const generatedArt = current.visual?.status === "ready" && current.visual.url && (current.visual.expiresAt ?? 0) > Date.now() ? current.visual.url : undefined;
+  const sceneArt = current.illustration ?? generatedArt ?? getPortrait(run.character.portrait).src;
+  const artCaption = current.illustration
+    ? "固定故事 · 内置场景插图"
+    : generatedArt
+      ? "AI 实时章节插图 · 使用所选立绘作为角色参考"
+      : current.visual?.status === "failed"
+        ? "AI 插图生成失败 · 暂用所选立绘"
+        : "AI 正在按本章情节生成插图 · 暂用所选立绘";
+  return <main className="play-page"><AppHeader compact /><div className="chapter-progress"><span>{current.chapterTitle} · 第 {sceneInChapter} 幕</span><div>{chapterNumbers.map((chapter) => <i className={chapter <= current.chapter ? "active" : ""} key={chapter} />)}</div><Link href={`/map/${run.id}`}>查看人生地图</Link></div><section className="story-stage"><div className="scene-art illustrated"><SceneArtwork src={sceneArt} alt={`${current.title}手绘剧情场景`} /><div className="scene-vignette" /><small>{artCaption}</small></div><article className="story-panel">{previous && run.currentIndex > 0 && <p className="memory-echo">人物记得：{previous.memory}</p>}<p className="scene-count">{chapterLabel} · SCENE {sceneInChapter}</p><h1>{current.title}</h1><ScrollRevealText className="scene-text rich-scene" text={current.scene} />{current.dialogue && <blockquote>{current.dialogue}</blockquote>}{!resolvedChoice && (current.choices?.length ?? 0) > 0 && <div className="choices"><p>故事走到这里，{run.character.name}准备如何回应？</p>{(current.choices ?? []).map((item, index) => <button onClick={() => choose(index)} key={item.id}><b>{String.fromCharCode(65 + index)}</b><span><strong>{item.label}</strong><small>{item.hint}</small></span><em>→</em></button>)}</div>}
     {resolvedChoice && <section className="inline-outcome" id="choice-outcome"><p className="eyebrow">YOUR CHOICE · {resolvedChoice.label}</p><h2>选择之后，生活继续发生</h2><ScrollRevealText className="outcome-story" text={resolvedChoice.outcome} /><div className="consequence-grid"><div><small>获得</small><p>{resolvedChoice.gain}</p></div><div><small>代价</small><p>{resolvedChoice.cost}</p></div><div><small>仍然未知</small><p>{resolvedChoice.unknown}</p></div></div></section>}
     {current.chapterEnd && <section className="inline-coach"><p className="eyebrow">{chapterLabel} · LIFE COACH</p><h3>这一章，先在这里停一下</h3><p className="chapter-summary">以下五维只记录本章变化，不代表选择的好坏。</p><div className="delta-row">{Object.entries(chapterDeltas).filter(([, value]) => value).map(([key, value]) => <span key={key}><b>{statLabels[key]}</b><em className={(value || 0) > 0 ? "up" : "down"}>{(value || 0) > 0 ? "+" : ""}{value}</em></span>)}</div><div className="coach"><small>章末镜面 · 不替你决定</small><p>{current.coach}</p></div><small className="no-rank">Coach 从本章经历中提出问题，不提供标准答案。</small></section>}
     {continueError && <p className="continue-error">{continueError}</p>}

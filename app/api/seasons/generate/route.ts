@@ -67,6 +67,7 @@ export async function POST(request: Request) {
   const story = base.nodes.map((node, index) => ({
     ...node,
     id: `custom-${index + 1}`,
+    illustration: undefined,
     title: index === 0 ? "生活按下暂停键" : node.title,
     scene: index === 0
       ? `${character.name}正在经历：${character.dilemma}。现实没有立刻给出答案，故事会从她已有的资源、关系和限制开始，而不是靠巧合替她解决问题。`
