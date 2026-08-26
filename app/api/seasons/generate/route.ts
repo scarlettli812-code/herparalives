@@ -41,6 +41,7 @@ export async function POST(request: Request) {
   if (!base) return NextResponse.json({ error: "安全故事模板不可用" }, { status: 503 });
   const storyState = initialWorldState(character);
   const baseBible = createInitialStoryBible(character, storyState);
+  let fallbackReason = llmConfigured() ? "AI 返回内容未通过结构或因果检查" : "故事生成服务尚未配置 API Key";
 
   // LLM path: full season plan + chapter 1 in a single call.
   if (llmConfigured()) {
@@ -59,6 +60,7 @@ export async function POST(request: Request) {
       };
       return NextResponse.json({ jobId: crypto.randomUUID(), status: "first_chapter_ready", chapters: result.data.plan.chapters, provider: "bailian", promptVersion: STORY_EDITOR_PROMPT_VERSION, story, plan: result.data.plan, storyBible, storyState, eventLedger: [], preferences: body.preferences });
     }
+    fallbackReason = `AI 生成失败：${result.error.code}`;
   }
 
   // Safe-template fallback: identical to the pre-LLM behavior, plus a plan derived from the template chapters.
@@ -91,5 +93,5 @@ export async function POST(request: Request) {
       status: "open" as const,
     })),
   };
-  return NextResponse.json({ jobId: crypto.randomUUID(), status: "first_chapter_ready", chapters: 5, provider: "safe-template", promptVersion: STORY_EDITOR_PROMPT_VERSION, story, plan, storyBible, storyState, eventLedger: [], preferences: body.preferences });
+  return NextResponse.json({ jobId: crypto.randomUUID(), status: "first_chapter_ready", chapters: 5, provider: "safe-template", fallbackReason, promptVersion: STORY_EDITOR_PROMPT_VERSION, story, plan, storyBible, storyState, eventLedger: [], preferences: body.preferences });
 }
