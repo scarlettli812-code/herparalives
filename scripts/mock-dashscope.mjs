@@ -1,6 +1,9 @@
 // Mock DashScope OpenAI-compatible endpoint for local E2E verification.
 // Usage: node scripts/mock-dashscope.mjs [port]
-// The dev server points at it via LLM_BASE_URL=http://127.0.0.1:8787/v1 DASHSCOPE_API_KEY=mock
+// The dev server points text and image generation at this process:
+// LLM_BASE_URL=http://127.0.0.1:8787/v1
+// DASHSCOPE_IMAGE_ENDPOINT=http://127.0.0.1:8787/api/v1/services/aigc/multimodal-generation/generation
+// DASHSCOPE_API_KEY=mock
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
@@ -15,6 +18,33 @@ const CHARACTER = fixture("character.json");
 const SEASON = fixture("season.json");
 const CHAPTER_2 = fixture("chapter-2.json");
 
+const addCausality = (payload) => {
+  const copy = JSON.parse(JSON.stringify(payload));
+  const nodes = copy.nodes ?? copy.story ?? [];
+  for (const node of nodes) {
+    for (const choice of node.choices ?? []) {
+      choice.effects ??= [
+        { domain: "career", to: `已选择「${choice.label}」`, consequence: choice.memory },
+        { domain: "selfFulfillment", to: `正在承担「${choice.cost}」`, consequence: choice.outcome.slice(-60) },
+      ];
+      choice.pathType ??= "branch";
+      choice.expectedConsequence ??= choice.memory;
+      choice.consequenceDueInChapters ??= 1;
+    }
+  }
+  return copy;
+};
+
+const pendingEventsFromPrompt = (user) => {
+  const match = user.match(/因果事件账本[^：]*：\n([\s\S]*?)\n\n请输出 JSON/);
+  if (!match) return [];
+  try {
+    return JSON.parse(match[1]).filter((event) => event.status === "pending");
+  } catch {
+    return [];
+  }
+};
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const send = (status, body) => {
@@ -23,6 +53,9 @@ const server = createServer(async (req, res) => {
   };
   if (req.method === "GET" && url.pathname === "/v1/models") {
     return send(200, { object: "list", data: [{ id: "qwen-mock", object: "model" }] });
+  }
+  if (req.method === "POST" && url.pathname === "/api/v1/services/aigc/multimodal-generation/generation") {
+    return send(200, { output: { choices: [{ message: { content: [{ type: "image", image: "http://localhost:3000/images/linan-ch1-v1.png" }] } }], finished: true } });
   }
   if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
     return send(404, { error: { message: "not found" } });
@@ -39,8 +72,10 @@ const server = createServer(async (req, res) => {
     // chapterEnd and endsStory on the last node.
     const match = user.match(/第\s*(\d+)\s*章的节点/);
     const chapter = match ? Number(match[1]) : 2;
-    fixtureContent = JSON.parse(JSON.stringify(CHAPTER_2), (key, value) => (key === "chapter" ? chapter : value));
-  } else fixtureContent = SEASON;
+    fixtureContent = addCausality(JSON.parse(JSON.stringify(CHAPTER_2), (key, value) => (key === "chapter" ? chapter : value)));
+    const evidence = fixtureContent.story[0].scene.slice(0, 28);
+    fixtureContent.callbacks = pendingEventsFromPrompt(user).slice(0, 6).map((event) => ({ eventId: event.id, evidence }));
+  } else fixtureContent = addCausality(SEASON);
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
   send(200, { choices: [{ message: { role: "assistant", content: JSON.stringify(fixtureContent) } }] });
 });

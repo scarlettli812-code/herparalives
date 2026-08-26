@@ -2,7 +2,7 @@
 //
 // Setup:
 //   Terminal 1: node scripts/mock-dashscope.mjs
-//   Terminal 2: LLM_BASE_URL=http://127.0.0.1:8787/v1 DASHSCOPE_API_KEY=mock pnpm dev
+//   Terminal 2: LLM_BASE_URL=http://127.0.0.1:8787/v1 DASHSCOPE_IMAGE_ENDPOINT=http://127.0.0.1:8787/api/v1/services/aigc/multimodal-generation/generation DASHSCOPE_API_KEY=mock pnpm dev
 //   Terminal 3: node scripts/e2e-llm.mjs
 //
 // The script spawns its own mock server on port 8787, so Terminal 1 is optional —
@@ -122,12 +122,12 @@ async function main() {
     assert(dotCount === 5, `expected 5 chapter-progress dots, got ${dotCount}`);
     const activeDots = await page.$$eval(".chapter-progress i.active", (dots) => dots.length);
     assert(activeDots === 1, `expected 1 active dot, got ${activeDots}`);
+    await page.waitForFunction(() => document.querySelector(".scene-art small")?.textContent?.includes("AI 实时章节插图"), { timeout: 30000 });
     log("play: CHAPTER 1 renders with 5-dot progress");
 
     // ---- negative path: mock down BEFORE the chapter-1 final node renders ----
-    // The play page prefetches the next chapter the moment the final node is
-    // displayed — with the mock still up the chapter would be cached and the
-    // retry state would never show, so kill it before entering the final node.
+    // The play page only prefetches after the chapter-final choice is recorded.
+    // Kill the mock before that choice so the retry state is deterministic.
     log("negative: kill mock before chapter-1 final node, expect retry state");
     await page.click(".choices button");
     await page.waitForSelector("#choice-outcome");
@@ -153,6 +153,11 @@ async function main() {
     await page.click(".story-continue");
     await page.waitForFunction(() => document.querySelector(".scene-count")?.textContent?.includes("CHAPTER 2"), { timeout: 30000 });
     assert(chapterRequests >= 1, "no POST /api/chapters/generate captured");
+    const realized = await page.evaluate(() => {
+      const runs = JSON.parse(localStorage.getItem("parallel-her:runs") || "[]");
+      return runs[0]?.eventLedger?.some((event) => event.status === "realized");
+    });
+    assert(realized, "chapter 2 did not realize any pending causal event");
     log(`retry OK → CHAPTER 2 (${chapterRequests} generation request(s))`);
 
     // ---- chapters 2 → 5 ----
