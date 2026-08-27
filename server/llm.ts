@@ -15,10 +15,10 @@ export type LlmResult<T> = { ok: true; data: T } | { ok: false; error: LlmError 
 
 const DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 const MAX_TOKENS = 6000;
-// qwen3.7-max generates ~2000-3500 tokens of Chinese prose at 20-40 tok/s, so a
-// chapter-sized call needs ~110-160s. 170s × 2 + retry sleeps can exceed the 300s
-// route maxDuration in production (the route then returns 504 and the client shows
-// its retry state — graceful); locally the request simply finishes.
+// Defaults are intentionally conservative, but latency-sensitive routes must set
+// their own budgets. In particular, never combine 170s × 2 inside a Vercel Hobby
+// function: the platform terminates the invocation at 300s before the caller can
+// return a structured fallback response.
 const TIMEOUT_MS = 170_000;
 const MAX_ATTEMPTS = 2;
 
@@ -37,11 +37,18 @@ export function structuredModel(): string {
   return process.env.QWEN_STRUCTURED_MODEL || "qwen-plus";
 }
 
-type ChatOpts<T> = { model?: string; temperature?: number; maxTokens?: number; schema?: z.ZodType<T> };
+type ChatOpts<T> = {
+  model?: string;
+  temperature?: number;
+  maxTokens?: number;
+  schema?: z.ZodType<T>;
+  timeoutMs?: number;
+  maxAttempts?: number;
+};
 
 type PostResult = { status: number; text: string; retryAfter?: number };
 
-async function post(body: Record<string, unknown>): Promise<PostResult> {
+async function post(body: Record<string, unknown>, timeoutMs: number): Promise<PostResult> {
   const base = (process.env.LLM_BASE_URL || DEFAULT_BASE_URL).replace(/\/$/, "");
   const response = await fetch(`${base}/chat/completions`, {
     method: "POST",
@@ -50,7 +57,7 @@ async function post(body: Record<string, unknown>): Promise<PostResult> {
       authorization: `Bearer ${process.env.DASHSCOPE_API_KEY}`,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   const retryAfter = Number(response.headers.get("retry-after") || 0) || undefined;
   return { status: response.status, text: await response.text(), retryAfter };
@@ -75,6 +82,8 @@ function parseContent(content: string): unknown {
 
 export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<T>): Promise<LlmResult<T>> {
   if (!llmConfigured()) return { ok: false, error: { code: "no_key" } };
+  const timeoutMs = Math.max(1_000, opts?.timeoutMs ?? TIMEOUT_MS);
+  const maxAttempts = Math.min(3, Math.max(1, opts?.maxAttempts ?? MAX_ATTEMPTS));
   const baseBody: Record<string, unknown> = {
     model: opts?.model || structuredModel(),
     messages: [
@@ -96,22 +105,22 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
     }
     return false;
   };
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     let response: PostResult;
     try {
-      response = await post(baseBody);
+      response = await post(baseBody, timeoutMs);
     } catch (error) {
       // network error / timeout — retry once unless we already did
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[llm] attempt ${attempt}: fetch failed: ${message}`);
-      if (attempt < MAX_ATTEMPTS) { switchToFallback(); await sleep(1500); continue; }
+      if (attempt < maxAttempts) { switchToFallback(); await sleep(1500); continue; }
       return { ok: false, error: { code: "timeout" } };
     }
     if (response.status === 429) {
       console.error(`[llm] attempt ${attempt}: 429 (retry-after ${response.retryAfter ?? "?"})`);
-      if (attempt < MAX_ATTEMPTS) {
+      if (attempt < maxAttempts) {
         switchToFallback();
-        await sleep((response.retryAfter || 2) * 1000);
+        await sleep(Math.min((response.retryAfter || 2) * 1000, 5_000));
         continue;
       }
       return { ok: false, error: { code: "http", status: 429 } };
@@ -124,7 +133,7 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
     }
     if (response.status >= 500 || response.status === 401 || response.status === 404) {
       console.error(`[llm] attempt ${attempt}: http ${response.status} ${response.text.slice(0, 200)}`);
-      if (attempt < MAX_ATTEMPTS) { switchToFallback(); await sleep(2000); continue; }
+      if (attempt < maxAttempts) { switchToFallback(); await sleep(2000); continue; }
       return { ok: false, error: { code: "http", status: response.status } };
     }
     if (response.status !== 200) {
@@ -142,7 +151,7 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
           const issues = parsed.error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join(" | ");
           const logContent = process.env.NODE_ENV === "production" ? JSON.stringify(content).slice(0, 200) : JSON.stringify(content);
           console.error(`[llm] attempt ${attempt}: schema mismatch — top-level keys: ${JSON.stringify(Object.keys(data as object))} — content: ${logContent} — issues: ${issues.slice(0, 600)}`);
-          if (attempt < MAX_ATTEMPTS) {
+          if (attempt < maxAttempts) {
             const switched = switchToFallback();
             // Some models (e.g. qwen-max) collapse nested objects into strings in
             // json_object mode but produce proper structure in plain-text mode —
@@ -161,7 +170,7 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[llm] attempt ${attempt}: response parse failed: ${message}`);
-      if (attempt < MAX_ATTEMPTS) {
+      if (attempt < maxAttempts) {
         const switched = switchToFallback();
         if (!switched && baseBody.response_format) {
           console.error("[llm] retrying once without response_format");

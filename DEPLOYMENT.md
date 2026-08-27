@@ -26,9 +26,9 @@
 
 - 在阿里云百炼控制台开通 `qwen-plus`（或 `qwen3.7-max`）模型并创建 API key；key 只配置在 Vercel dashboard / 本地 `.env.local`，绝不提交仓库。
 - 生成链路：`/create`（角色卡，plus）→ `/prepare`（5 章大纲 + 第一章，plus）→ 阅读过程中按章生成（`/api/chapters/generate`，plus）。
-- 默认模型 `qwen-plus`：约 90 秒/章，稳定在超时窗口内；想提升文本质感可设 `QWEN_STORY_MODEL=qwen3.7-max`，但单章常需 110–170 秒且超时仍计费。
+- 默认模型 `qwen-plus`。角色卡使用 45 秒单次预算；首章使用 120 秒单次预算并限制输出长度；后续章节使用 110 秒、最多两次的预算。超时调用仍可能计费。
 - 下一章只会在章末选择已经记录后后台预生成；缓存绑定 `stateVersion`，回溯或换选项后不会复用旧分支。失败时回退到点击时按需生成。
-- Vercel Hobby 计划函数最长 10 秒，Pro 默认 60 秒（可调至 300 秒）；qwen 生成整章可能需要 30–90 秒，三个生成接口均已声明 `maxDuration = 60/300`，需 Pro 计划或自托管才能生效。
+- Vercel Hobby 的 Fluid Compute 函数最长 300 秒。调用预算必须小于该上限并为 JSON 序列化与 fallback 留余量；首章接口声明 `maxDuration = 180`，后续章节为 300 秒。
 - 无 key 或调用失败时自动回退：角色卡 → 规则分类器，故事 → 内置安全模板，无需额外处理。
 
 ## AI 章节插图（Wan 2.7）

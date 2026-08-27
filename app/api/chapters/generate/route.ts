@@ -74,7 +74,9 @@ export async function POST(request: Request) {
   const result = await chatJSON(prompt.system, prompt.user, {
     model: storyModel(),
     temperature: 0.9,
-    maxTokens: 8000,
+    maxTokens: 6000,
+    timeoutMs: 110_000,
+    maxAttempts: 2,
     schema: CHAPTER_RESULT_SCHEMA,
   });
   if (!result.ok) return NextResponse.json({ error: "generate_failed" }, { status: 502 });

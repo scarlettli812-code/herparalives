@@ -6,7 +6,7 @@ import type { CharacterCard, StoryChoice, StoryPreferences, StoryPlan } from "@/
 import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
 import { STORY_EDITOR_PROMPT_VERSION } from "@/server/story-editor-prompt";
 
-export const maxDuration = 300;
+export const maxDuration = 180;
 
 function initialWorldState(character: CharacterCard) {
   return createInitialStoryState({
@@ -43,10 +43,19 @@ export async function POST(request: Request) {
   const baseBible = createInitialStoryBible(character, storyState);
   let fallbackReason = llmConfigured() ? "AI 返回内容未通过结构或因果检查" : "故事生成服务尚未配置 API Key";
 
-  // LLM path: full season plan + chapter 1 in a single call.
+  // LLM path: full season plan + chapter 1 in a single, bounded call. The route
+  // must retain enough time to serialize the safe template before Vercel's 300s
+  // hard limit, so an initial timeout is never retried inside this invocation.
   if (llmConfigured()) {
     const prompt = buildSeasonPrompt(character, character.promptConstraints ?? []);
-    const result = await chatJSON(prompt.system, prompt.user, { model: storyModel(), temperature: 0.9, maxTokens: 8000, schema: SEASON_RESULT_SCHEMA });
+    const result = await chatJSON(prompt.system, prompt.user, {
+      model: storyModel(),
+      temperature: 0.9,
+      maxTokens: 4200,
+      timeoutMs: 120_000,
+      maxAttempts: 1,
+      schema: SEASON_RESULT_SCHEMA,
+    });
     if (result.ok) {
       const story = rewriteNodeIds(result.data.nodes, crypto.randomUUID().slice(0, 8));
       const storyBible = {
