@@ -61,10 +61,17 @@ export function imageGenerationConfigured(): boolean {
   return Boolean(process.env.DASHSCOPE_API_KEY);
 }
 
-async function portraitDataUrl(portraitId: number): Promise<string | null> {
+async function portraitReference(portraitId: number): Promise<string | null> {
   const portrait = getPortrait(portraitId);
   const relativePath = portrait.src.replace(/^\//, "");
   if (!relativePath.startsWith("images/")) return null;
+
+  // Avoid embedding a 2–3 MB portrait in every request. Vercel exposes this
+  // deployment's public assets at a stable HTTPS URL that Wan can fetch itself.
+  // Local development has no public host, so it keeps the Base64 fallback.
+  const deploymentHost = process.env.VERCEL_URL;
+  if (deploymentHost) return `https://${deploymentHost}/${relativePath}`;
+
   try {
     const data = await readFile(path.join(process.cwd(), "public", relativePath));
     const extension = path.extname(relativePath).slice(1).toLowerCase();
@@ -77,7 +84,7 @@ async function portraitDataUrl(portraitId: number): Promise<string | null> {
 
 export async function generateStoryIllustration(input: IllustrationInput): Promise<IllustrationResult> {
   if (!imageGenerationConfigured()) return { ok: false, code: "not_configured" };
-  const reference = await portraitDataUrl(input.portraitId);
+  const reference = await portraitReference(input.portraitId);
   if (!reference) return { ok: false, code: "reference_missing" };
 
   const model = process.env.WAN_IMAGE_MODEL || "wan2.7-image-pro";
