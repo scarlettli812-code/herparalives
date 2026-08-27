@@ -114,7 +114,10 @@ export async function generateStoryIllustration(input: IllustrationInput): Promi
       "X-DashScope-Async": "enable",
     },
     body: requestBody,
-    signal: AbortSignal.timeout(25_000),
+    // Base64 reference portraits make task submission slower than text-only
+    // requests; allow enough time to upload while staying well below Vercel's
+    // function ceiling.
+    signal: AbortSignal.timeout(60_000),
   }).catch(() => null);
   if (!submitted) return providerFailure(null, 0);
 
@@ -124,7 +127,7 @@ export async function generateStoryIllustration(input: IllustrationInput): Promi
   if (!taskId) return providerFailure(payload, submitted.status);
 
   const startedAt = Date.now();
-  const deadline = startedAt + 240_000;
+  const deadline = startedAt + 210_000;
   while (Date.now() < deadline) {
     await wait(Date.now() - startedAt < 30_000 ? 3_000 : 8_000);
     const polled = await fetch(taskEndpoint(configuredEndpoint, taskId), {
@@ -156,5 +159,5 @@ export async function generateStoryIllustration(input: IllustrationInput): Promi
     return { ok: true, url, expiresAt: Date.now() + 23 * 60 * 60 * 1000, model };
   }
 
-  return providerFailure({ code: "PollingTimeout", message: "Wan task did not finish within 240 seconds" }, 408);
+  return providerFailure({ code: "PollingTimeout", message: "Wan task did not finish within 210 seconds" }, 408);
 }
