@@ -202,21 +202,25 @@ const EXAMPLE_PLAIN_NODE = `{
     "chapterEnd": false
   }`;
 
+// The first response must become playable well inside a serverless request.
+// Later chapters still use the full two-to-three-node editorial format.
+const EXAMPLE_SEASON_NODE = EXAMPLE_NODE
+  .replace("350—800字完整场景", "300—500字完整场景")
+  .replace("180—450字完整故事", "120—220字完整故事")
+  .replace('"chapterEnd": false', '"chapterEnd": true');
+
 const SEASON_TASK = [
-  `【本次任务】根据角色卡与风格约束，设计一季 5 章的故事大纲，并完整写出第一章的全部叙事节点。`,
+  `【本次任务】根据角色卡与风格约束，设计一季 5 章的简要大纲，并写出第一章一个可立即游玩的关键抉择场景。后续场景将在玩家选择后继续生成。`,
   `【输出规则】只输出 JSON，不要任何其他文字。顶层只允许两个键："plan" 与 "nodes"，禁止添加任何其他键。严格按下面的格式示例输出——示例中的"（…）"占位文字只是说明，实际内容必须完整真实。`,
   `{`,
   `  "plan": { "chapters": 5, "items": ${EXAMPLE_PLAN_ITEMS} },`,
-  `  "nodes": [ ${EXAMPLE_PLAIN_NODE}, ${EXAMPLE_NODE} ]`,
+  `  "nodes": [ ${EXAMPLE_SEASON_NODE} ]`,
   `}`,
-  `【节点类型】节点分两种：`,
-  `① 纯叙事节点：没有 choices 字段，用于推进场景、情绪与事件，玩家只阅读不做选择（上面的第一个示例）。`,
-  `② 抉择节点：带 choices 字段（2—3 个选项），只出现在真正的关键抉择点：方向选择、代价交换、关系转折、价值观取舍；选项必须构成真实两难，每个选项都有明确的收益与代价（上面的第二个示例）。`,
-  `禁止在无关紧要的细节上设置选项——先做哪件事、买不买东西、回不回消息这类都不算关键抉择点。每章必须至少包含 1 个抉择节点，其余为纯叙事节点。`,
+  `【首章低延迟规则】nodes 必须恰好 1 个抉择节点，带 2—3 个真正改变方向、代价、关系或价值取舍的选项；禁止在先做哪件事、买不买东西、回不回消息等无关细节上设置选择。`,
   `【类型铁律】每个值必须保持自己的类型：plan.items 的每一项必须是对象；deltas 必须是对象；scene、outcome、label 等必须是字符串。严禁把对象或数组压缩成 "chapter: 1, title: …" 这样的字符串。节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
-  `【节点规则】nodes 只写第一章，chapter 全为 1，共 1—2 个节点；最后一个节点 chapterEnd 必须为 true（其余节点为 false）且带 20 字以上的 coach；第一章所有选项禁止出现 nextNodeId 字段（后续章节由系统按你的 plan 续写）；deltas 使用 career / wisdom / happiness / relationship / courage 五个键，值为 -3 到 3 的整数，未变化的维度可省略。`,
+  `【节点规则】唯一节点的 chapter 必须为 1、chapterEnd 必须为 true，并带 20 字以上的 coach；所有选项禁止出现 nextNodeId 字段；deltas 使用 career / wisdom / happiness / relationship / courage 五个键，值为 -3 到 3 的整数，未变化的维度可省略。`,
   `【因果规则】每个选项必须绑定 2—3 个 effects，domain 只能是 career / economy / relationship / selfFulfillment；同时给出 pathType、expectedConsequence 和 1—3 章内兑现期限。effects.to 必须写成选择后已经成立的具体状态，consequence 必须能在后续场景中被角色行动、对话或资源变化明确证明。`,
-  `【正文要求】scene 按编辑规范写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
+  `【正文要求】首章 scene 写 300—500 字完整场景，每个 outcome 写 120—220 字完整选后剧情；禁止缩写或提纲式输出。后续章节恢复完整叙事密度。`,
 ].join("\n");
 
 export function buildSeasonPrompt(

@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     const result = await chatJSON(prompt.system, prompt.user, {
       model: storyModel(),
       temperature: 0.9,
-      maxTokens: 4200,
+      maxTokens: 2800,
       timeoutMs: 120_000,
       maxAttempts: 1,
       schema: SEASON_RESULT_SCHEMA,
