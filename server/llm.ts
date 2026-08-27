@@ -44,6 +44,7 @@ type ChatOpts<T> = {
   schema?: z.ZodType<T>;
   timeoutMs?: number;
   maxAttempts?: number;
+  enableThinking?: boolean;
 };
 
 type PostResult = { status: number; text: string; retryAfter?: number };
@@ -94,6 +95,9 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
     max_tokens: opts?.maxTokens ?? MAX_TOKENS,
     response_format: { type: "json_object" },
   };
+  if (opts?.enableThinking !== undefined) {
+    baseBody.enable_thinking = opts.enableThinking;
+  }
   // Retry budget is small, so a failing attempt switches to the fast structured
   // model (qwen-plus by default) instead of repeating a doomed slow call — qwen3.7-max
   // chapter-sized generation can exceed the timeout, and qwen-plus finishes it fast.

@@ -77,6 +77,7 @@ export async function POST(request: Request) {
     maxTokens: 6000,
     timeoutMs: 110_000,
     maxAttempts: 2,
+    enableThinking: false,
     schema: CHAPTER_RESULT_SCHEMA,
   });
   if (!result.ok) return NextResponse.json({ error: "generate_failed" }, { status: 502 });

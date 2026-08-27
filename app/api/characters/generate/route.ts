@@ -42,6 +42,7 @@ export async function POST(request: Request) {
       maxTokens: 800,
       timeoutMs: 45_000,
       maxAttempts: 1,
+      enableThinking: false,
       schema: CHARACTER_CARD_SCHEMA,
     });
     if (result.ok) generated = result.data;

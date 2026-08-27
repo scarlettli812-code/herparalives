@@ -54,6 +54,7 @@ export async function POST(request: Request) {
       maxTokens: 2800,
       timeoutMs: 120_000,
       maxAttempts: 1,
+      enableThinking: false,
       schema: SEASON_RESULT_SCHEMA,
     });
     if (result.ok) {
