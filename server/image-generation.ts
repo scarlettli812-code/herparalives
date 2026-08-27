@@ -66,9 +66,17 @@ async function portraitReference(portraitId: number): Promise<string | null> {
   const relativePath = portrait.src.replace(/^\//, "");
   if (!relativePath.startsWith("images/")) return null;
 
-  // Avoid embedding a 2–3 MB portrait in every request. Vercel exposes this
-  // deployment's public assets at a stable HTTPS URL that Wan can fetch itself.
-  // Local development has no public host, so it keeps the Base64 fallback.
+  // Avoid embedding a 2–3 MB portrait in every request. Preview deployments can
+  // be protected from external fetchers, so use the exact public Git commit via
+  // jsDelivr when Vercel supplies repository metadata. Local development keeps
+  // the Base64 fallback.
+  const repositoryOwner = process.env.VERCEL_GIT_REPO_OWNER;
+  const repositorySlug = process.env.VERCEL_GIT_REPO_SLUG;
+  const commitSha = process.env.VERCEL_GIT_COMMIT_SHA;
+  if (repositoryOwner && repositorySlug && commitSha) {
+    return `https://cdn.jsdelivr.net/gh/${repositoryOwner}/${repositorySlug}@${commitSha}/public/${relativePath}`;
+  }
+
   const deploymentHost = process.env.VERCEL_URL;
   if (deploymentHost) return `https://${deploymentHost}/${relativePath}`;
 
