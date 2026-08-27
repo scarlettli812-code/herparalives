@@ -16,6 +16,19 @@ type WanPayload = {
   message?: string;
 };
 
+function providerFailure(payload: WanPayload | null, status: number): IllustrationResult {
+  // Keep provider diagnostics in server logs only: they are useful for telling a
+  // regional endpoint mismatch from an unavailable model, but should not expose
+  // account details to the browser.
+  console.error("[wan] generation failed", {
+    status,
+    requestId: payload?.request_id,
+    code: payload?.code,
+    message: payload?.message?.slice(0, 300),
+  });
+  return { ok: false, code: "provider_error" };
+}
+
 export type IllustrationInput = {
   portraitId: number;
   characterName: string;
@@ -71,15 +84,27 @@ export async function generateStoryIllustration(input: IllustrationInput): Promi
       input: {
         messages: [{ role: "user", content: [{ image: reference }, { text: prompt }] }],
       },
-      parameters: { n: 1, size: "1280*720", watermark: false },
+      // Wan 2.7 enables its image reasoning mode by default. This prompt is
+      // already detailed, so disabling it makes chapter art materially faster
+      // without holding up the playable story.
+      parameters: { n: 1, size: "1280*720", watermark: false, thinking_mode: false },
     }),
     signal: AbortSignal.timeout(180_000),
   }).catch(() => null);
-  if (!response?.ok) return { ok: false, code: "provider_error" };
+  if (!response) return providerFailure(null, 0);
 
   const payload = await response.json() as WanPayload;
+  if (!response.ok) return providerFailure(payload, response.status);
   const url = payload.output?.choices?.[0]?.message?.content?.find((item) => item.image)?.image;
-  if (!url) return { ok: false, code: "invalid_response" };
+  if (!url) {
+    console.error("[wan] response did not contain an image", {
+      status: response.status,
+      requestId: payload.request_id,
+      code: payload.code,
+      message: payload.message?.slice(0, 300),
+    });
+    return { ok: false, code: "invalid_response" };
+  }
   // DashScope result URLs are temporary. Guest runs already expire after 24h,
   // so the visual has the same lifetime and is regenerated if it expires first.
   return { ok: true, url, expiresAt: Date.now() + 23 * 60 * 60 * 1000, model };
