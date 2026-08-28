@@ -194,14 +194,12 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
           const logContent = process.env.NODE_ENV === "production" ? JSON.stringify(content).slice(0, 200) : JSON.stringify(content);
           console.error(`[llm] attempt ${attempt}: schema mismatch — top-level keys: ${JSON.stringify(Object.keys(data as object))} — content: ${logContent} — issues: ${issues.slice(0, 600)}`);
           if (attempt < maxAttempts) {
-            const switched = switchToFallback();
-            // Some models (e.g. qwen-max) collapse nested objects into strings in
-            // json_object mode but produce proper structure in plain-text mode —
-            // only relevant when retrying the same model.
-            if (!switched && baseBody.response_format) {
-              console.error("[llm] retrying once without response_format");
-              delete baseBody.response_format;
-            }
+            switchToFallback();
+            // Keep JSON mode for repair attempts; shape normalization handles the
+            // harmless provider drift, while a lower temperature reduces repeated
+            // syntax/shape mistakes. response_format is removed only when the API
+            // explicitly rejects that parameter with HTTP 400 above.
+            baseBody.temperature = Math.min(Number(baseBody.temperature ?? 0.9), 0.4);
             continue;
           }
           return { ok: false, error: { code: "parse" } };
@@ -213,11 +211,8 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[llm] attempt ${attempt}: response parse failed: ${message}`);
       if (attempt < maxAttempts) {
-        const switched = switchToFallback();
-        if (!switched && baseBody.response_format) {
-          console.error("[llm] retrying once without response_format");
-          delete baseBody.response_format;
-        }
+        switchToFallback();
+        baseBody.temperature = Math.min(Number(baseBody.temperature ?? 0.9), 0.4);
         await sleep(1500);
         continue;
       }

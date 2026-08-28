@@ -43,18 +43,19 @@ export async function POST(request: Request) {
   const baseBible = createInitialStoryBible(character, storyState);
   let fallbackReason = llmConfigured() ? "AI 返回内容未通过结构或因果检查" : "故事生成服务尚未配置 API Key";
 
-  // LLM path: full season plan + chapter 1 in a single, bounded call. The route
-  // must retain enough time to serialize the safe template before Vercel's 300s
-  // hard limit, so an initial timeout is never retried inside this invocation.
+  // LLM path: full season plan + chapter 1 in a single, bounded call. Two 75s
+  // attempts fit under this route's 180s budget and recover the occasional
+  // malformed/truncated first response without stranding the player.
   if (llmConfigured()) {
     const prompt = buildSeasonPrompt(character, character.promptConstraints ?? []);
     const result = await chatJSON(prompt.system, prompt.user, {
       model: storyModel(),
       temperature: 0.9,
-      maxTokens: 2800,
-      timeoutMs: 120_000,
-      maxAttempts: 1,
+      maxTokens: 4500,
+      timeoutMs: 75_000,
+      maxAttempts: 2,
       enableThinking: false,
+      stream: true,
       schema: SEASON_RESULT_SCHEMA,
     });
     if (result.ok) {
