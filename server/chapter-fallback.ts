@@ -21,6 +21,16 @@ type SafeChapterInput = {
 };
 
 const compact = (value: string, length: number) => value.replace(/\s+/g, " ").trim().slice(0, length);
+const withoutTerminalPunctuation = (value: string) => value.replace(/[。！？.!?]+$/u, "");
+const excerpt = (value: string, length: number) => {
+  const flat = value.replace(/\s+/g, " ").trim();
+  if (flat.length <= length) return withoutTerminalPunctuation(flat);
+  const head = flat.slice(0, length);
+  const boundary = Math.max(head.lastIndexOf("。"), head.lastIndexOf("！"), head.lastIndexOf("？"));
+  return boundary >= Math.floor(length * 0.55)
+    ? withoutTerminalPunctuation(head.slice(0, boundary + 1))
+    : `${withoutTerminalPunctuation(head)}…`;
+};
 
 /**
  * Keeps a guest run playable when the provider times out or returns malformed
@@ -44,7 +54,7 @@ export function buildSafeChapter(input: SafeChapterInput): {
     evidence: compact(`「${event.choiceLabel}」带来的影响开始出现：${event.expectedConsequence}`, 116),
   }));
   const callbacks = callbackRows.map(({ event, evidence }) => ({ eventId: event.id, evidence }));
-  const callbackEvidence = callbackRows.map(({ evidence }) => evidence).join("\n");
+  const callbackEvidence = callbackRows.map(({ evidence }) => `${evidence}。`).join("\n");
   const stateSummary = [
     `职业：${compact(storyState.career, 70)}`,
     `经济：${compact(storyState.economy, 70)}`,
@@ -55,10 +65,10 @@ export function buildSafeChapter(input: SafeChapterInput): {
   const finalChapter = targetChapter === plan.chapters;
 
   const firstScene = [
-    `上一章结束后，${character.name}没有把「${choiceLabel}」留在一句口号里。她记得的是：${choiceMemory}。决定已经发生，生活开始用日程、钱、关系和精力检验它。`,
+    `上一章结束后，${character.name}没有把「${choiceLabel}」留在一句口号里。她记得的是：${withoutTerminalPunctuation(choiceMemory)}。决定已经发生，生活开始用日程、钱、关系和精力检验它。`,
     callbackEvidence,
     `几天后，她重新打开自己的记录。${stateSummary}。这些事实彼此牵连，没有哪一项能靠一次勇敢或退让自动消失。`,
-    `这一章原本要走向“${compact(planItem?.synopsis || character.goal, 120)}”。她先做的不是宣布答案，而是把上一章留下的承诺、现实限制和仍未解决的问题放到同一张纸上。${compact(input.lastOutcome || lastNode.scene.slice(-160), 160)}，那一刻的压力仍然在，但它现在有了可以继续处理的形状。`,
+    `这一章原本要走向“${withoutTerminalPunctuation(compact(planItem?.synopsis || character.goal, 120))}”。她先做的不是宣布答案，而是把上一章留下的承诺、现实限制和仍未解决的问题放到同一张纸上。上一章的即时结果也被记在纸上：“${excerpt(input.lastOutcome || lastNode.scene.slice(-180), 160)}”。那一刻的压力仍然在，但它现在有了可以继续处理的形状。`,
   ].filter(Boolean).join("\n\n");
 
   const decisionScene = [
