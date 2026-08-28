@@ -45,6 +45,7 @@ type ChatOpts<T> = {
   timeoutMs?: number;
   maxAttempts?: number;
   enableThinking?: boolean;
+  stream?: boolean;
 };
 
 type PostResult = { status: number; text: string; retryAfter?: number };
@@ -81,6 +82,41 @@ function parseContent(content: string): unknown {
   }
 }
 
+function readAssistantContent(responseText: string): string {
+  const trimmed = responseText.trim();
+  if (!trimmed.startsWith("data:")) {
+    const payload = JSON.parse(trimmed) as { choices?: { message?: { content?: string } }[] };
+    const content = payload.choices?.[0]?.message?.content;
+    if (!content) throw new Error("empty content");
+    return content;
+  }
+
+  let content = "";
+  for (const line of trimmed.split(/\r?\n/)) {
+    if (!line.startsWith("data:")) continue;
+    const raw = line.slice(5).trim();
+    if (!raw || raw === "[DONE]") continue;
+    const payload = JSON.parse(raw) as {
+      choices?: Array<{
+        delta?: { content?: string };
+        message?: { content?: string };
+      }>;
+    };
+    const chunk = payload.choices?.[0]?.delta?.content ?? payload.choices?.[0]?.message?.content;
+    if (chunk) content += chunk;
+  }
+  if (!content) throw new Error("empty streamed content");
+  return content;
+}
+
+function describeFetchError(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const cause = error.cause;
+  if (!cause || typeof cause !== "object") return error.message;
+  const detail = cause as { code?: unknown; message?: unknown };
+  return [error.message, detail.code, detail.message].filter(Boolean).join(" · ");
+}
+
 export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<T>): Promise<LlmResult<T>> {
   if (!llmConfigured()) return { ok: false, error: { code: "no_key" } };
   const timeoutMs = Math.max(1_000, opts?.timeoutMs ?? TIMEOUT_MS);
@@ -98,6 +134,7 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
   if (opts?.enableThinking !== undefined) {
     baseBody.enable_thinking = opts.enableThinking;
   }
+  if (opts?.stream) baseBody.stream = true;
   // Retry budget is small, so a failing attempt switches to the fast structured
   // model (qwen-plus by default) instead of repeating a doomed slow call — qwen3.7-max
   // chapter-sized generation can exceed the timeout, and qwen-plus finishes it fast.
@@ -114,8 +151,8 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
     try {
       response = await post(baseBody, timeoutMs);
     } catch (error) {
-      // network error / timeout — retry once unless we already did
-      const message = error instanceof Error ? error.message : String(error);
+      // Network error / timeout — retry while the caller's bounded attempt budget remains.
+      const message = describeFetchError(error);
       console.error(`[llm] attempt ${attempt}: fetch failed: ${message}`);
       if (attempt < maxAttempts) { switchToFallback(); await sleep(1500); continue; }
       return { ok: false, error: { code: "timeout" } };
@@ -145,9 +182,7 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
       return { ok: false, error: { code: "http", status: response.status } };
     }
     try {
-      const payload = JSON.parse(response.text) as { choices?: { message?: { content?: string } }[] };
-      const content = payload.choices?.[0]?.message?.content;
-      if (!content) throw new Error("empty content");
+      const content = readAssistantContent(response.text);
       // The retry path may deliberately disable response_format for models that
       // reject or distort nested JSON. Accept fenced JSON or a short prose wrapper
       // there instead of failing a recoverable second response.

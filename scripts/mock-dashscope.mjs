@@ -95,7 +95,17 @@ const server = createServer(async (req, res) => {
     fixtureContent = addProviderShapeDrift(fixtureContent);
   } else fixtureContent = addCausality(SEASON);
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-  send(200, { choices: [{ message: { role: "assistant", content: JSON.stringify(fixtureContent) } }] });
+  const content = JSON.stringify(fixtureContent);
+  if (body.stream) {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const midpoint = Math.ceil(content.length / 2);
+    for (const chunk of [content.slice(0, midpoint), content.slice(midpoint)]) {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: chunk } }] })}\n\n`);
+    }
+    res.end("data: [DONE]\n\n");
+    return;
+  }
+  send(200, { choices: [{ message: { role: "assistant", content } }] });
 });
 
 server.listen(port, () => console.log(`mock dashscope listening on http://127.0.0.1:${port}/v1`));

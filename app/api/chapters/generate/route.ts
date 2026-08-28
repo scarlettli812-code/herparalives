@@ -92,9 +92,10 @@ export async function POST(request: Request) {
     model: storyModel(),
     temperature: 0.9,
     maxTokens: 6000,
-    timeoutMs: 110_000,
-    maxAttempts: 2,
+    timeoutMs: 90_000,
+    maxAttempts: 3,
     enableThinking: false,
+    stream: true,
     schema: CHAPTER_RESULT_SCHEMA,
   });
   if (!result.ok) return safeResponse(`AI 续章生成失败：${result.error.code}`);
