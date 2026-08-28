@@ -2,14 +2,17 @@
 
 import type { CSSProperties } from "react";
 import { useEffect, useRef } from "react";
+import { splitProseParagraphs, storyParagraphOptions } from "@/lib/story-prose";
 
 type ScrollRevealTextProps = {
   text: string;
   className?: string;
+  variant?: "scene" | "outcome";
 };
 
-export function ScrollRevealText({ text, className = "" }: ScrollRevealTextProps) {
+export function ScrollRevealText({ text, className = "", variant = "scene" }: ScrollRevealTextProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const paragraphs = splitProseParagraphs(text, storyParagraphOptions[variant]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -35,7 +38,7 @@ export function ScrollRevealText({ text, className = "" }: ScrollRevealTextProps
   }, [text]);
 
   return <div className={`${className} scroll-reveal-text`} ref={containerRef}>
-    {text.split("\n\n").map((paragraph, index) => (
+    {paragraphs.map((paragraph, index) => (
       <p key={`${index}-${paragraph}`} style={{ "--reveal-delay": `${Math.min(index, 3) * 55}ms` } as CSSProperties}>{paragraph}</p>
     ))}
   </div>;

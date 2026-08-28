@@ -10,6 +10,7 @@ import { attachCallbackIds, sanitizeCallbacks } from "@/server/state-validator";
 import { auditNarrativeContinuity, buildRouteContract } from "@/server/route-continuity";
 import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
 import { buildSafeChapter } from "@/server/chapter-fallback";
+import { normalizeStoryProse } from "@/lib/story-prose";
 import type {
   CharacterCard,
   ChoiceRecord,
@@ -70,6 +71,7 @@ export async function POST(request: Request) {
     });
     return NextResponse.json({
       ...fallback,
+      story: normalizeStoryProse(fallback.story),
       provider: "safe-template",
       fallbackReason,
     });
@@ -103,7 +105,7 @@ export async function POST(request: Request) {
   });
   if (!result.ok) return safeResponse(`AI 续章生成失败：${result.error.code}`);
 
-  let story = rewriteNodeIds(result.data.story, crypto.randomUUID().slice(0, 8));
+  let story = normalizeStoryProse(rewriteNodeIds(result.data.story, crypto.randomUUID().slice(0, 8)));
   if (story.some((node) => node.chapter !== targetChapter)) {
     return safeResponse("AI 续章的章节编号未通过检查");
   }

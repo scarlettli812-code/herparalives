@@ -195,7 +195,7 @@ const EXAMPLE_NODE = `{
     "chapter": 1,
     "chapterTitle": "失业的起点",
     "title": "清晨的焦虑",
-    "scene": "（节点正文：350—800字完整场景。先写清时间、地点与人物正在做的事，再写一段有个性的对话或互动，最后写两种真实需求相撞的冲突，把选择推到玩家面前。禁止写 80—150 字的剧情摘要。）",
+    "scene": "（节点正文：350—800字、3—5个自然段的完整场景。先写清时间、地点与人物正在做的事，再写一段有个性的对话或互动，最后写两种真实需求相撞的冲突，把选择推到玩家面前。JSON字符串用\\n\\n分段，不写小标题，禁止写80—150字的剧情摘要。）",
     "dialogue": "（可选字段：一句有个性的台词）",
     "coach": "（可选字段：Life Coach 镜面回话，仅章末节点出现，20字以上）",
     "chapterEnd": false,
@@ -207,7 +207,7 @@ const EXAMPLE_NODE = `{
         "gain": "（选择后可能获得的东西，4—48字）",
         "cost": "（选择后需要付出的代价，4—48字）",
         "unknown": "（未说破的不确定因素，4—48字）",
-        "outcome": "（选后剧情：180—450字完整故事，至少两段，写清行动、回应、代价与下一幕悬念，禁止一两句带过）",
+        "outcome": "（选后剧情：180—450字、2—3个自然段的完整故事，JSON字符串用\\n\\n分段，写清行动、回应、代价与下一幕悬念，禁止一两句带过）",
         "deltas": { "career": 1, "happiness": -1 },
         "memory": "（这一选择值得被记住的一句话，4—60字）",
         "effects": [
@@ -229,7 +229,7 @@ const EXAMPLE_PLAIN_NODE = `{
     "chapter": 1,
     "chapterTitle": "失业的起点",
     "title": "清晨的焦虑",
-    "scene": "（节点正文：350—800字完整场景。先写清时间、地点与人物正在做的事，再写一段有个性的对话或互动，最后写两种真实需求相撞的冲突。这是纯叙事节点：不提供选项，让事件自然发生、情绪真实推进。禁止写 80—150 字的剧情摘要。）",
+    "scene": "（节点正文：350—800字、3—5个自然段的完整场景。先写清时间、地点与人物正在做的事，再写一段有个性的对话或互动，最后写两种真实需求相撞的冲突。这是纯叙事节点：不提供选项，让事件自然发生、情绪真实推进。JSON字符串用\\n\\n分段，不写小标题，禁止写80—150字的剧情摘要。）",
     "dialogue": "（可选字段：一句有个性的台词）",
     "chapterEnd": false
   }`;
@@ -254,7 +254,7 @@ const SEASON_TASK = [
   `【类型铁律】每个值必须保持自己的类型：plan.items 的每一项必须是对象；deltas 必须是对象；scene、outcome、label 等必须是字符串。严禁把对象或数组压缩成 "chapter: 1, title: …" 这样的字符串。节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
   `【节点规则】唯一节点的 chapter 必须为 1、chapterEnd 必须为 true，并带 20 字以上的 coach；所有选项禁止出现 nextNodeId 字段；deltas 使用 career / wisdom / happiness / relationship / courage 五个键，值为 -3 到 3 的整数，未变化的维度可省略。`,
   `【因果规则】每个选项必须绑定 2—3 个 effects，domain 只能是 career / economy / relationship / selfFulfillment；同时给出 pathType、expectedConsequence 和 1—3 章内兑现期限。effects.to 必须写成选择后已经成立的具体状态，consequence 必须能在后续场景中被角色行动、对话或资源变化明确证明。`,
-  `【正文要求】首章 scene 写 300—500 字完整场景，每个 outcome 写 120—220 字完整选后剧情；禁止缩写或提纲式输出。后续章节恢复完整叙事密度。`,
+  `【正文要求】首章 scene 写 300—500 字、分成 3—5 个自然段；每个 outcome 写 120—220 字、分成 2—3 个自然段。按场景建立、人物互动和冲突推进自然换段，不写分节小标题；JSON 字符串内用 \\n\\n 表示段落。禁止缩写或提纲式输出。后续章节恢复完整叙事密度。`,
 ].join("\n");
 
 export function buildSeasonPrompt(
@@ -320,7 +320,7 @@ export function buildChapterPrompt(input: ChapterInput): { system: string; user:
     `9. 新选择也必须绑定 2—3 个 effects（career / economy / relationship / selfFulfillment），并给出 pathType、expectedConsequence 与 1—3 章内的 consequenceDueInChapters。effects.to 必须是选择后已经成立、后文不得无故推翻的具体事实。`,
     `10. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；deltas 只能使用 career / wisdom / happiness / relationship / courage 五个键且值必须是数字，禁止写 economy / selfFulfillment；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
     `11. 现实规则：时间、金钱、身体、职场权力和人际关系都必须遵守常识。任何机会、原谅、升职、离职、和解或资源变化都要有过程，不能用巧合或突然出现的贵人无代价解决。`,
-    `12. 正文要求：scene 写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
+    `12. 正文要求：scene 写 350—800 字、分成 3—5 个自然段；outcome 写 180—450 字、分成 2—3 个自然段。按时间或地点变化、人物互动和冲突推进自然换段，不写分节小标题；JSON 字符串内用 \\n\\n 表示段落。禁止缩写或提纲式输出。`,
   ].join("\n");
   const user = [
     `角色卡：`,

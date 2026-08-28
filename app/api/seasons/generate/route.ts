@@ -5,6 +5,7 @@ import { SEASON_RESULT_SCHEMA, buildSeasonPrompt, rewriteNodeIds } from "@/serve
 import type { CharacterCard, StoryChoice, StoryPreferences, StoryPlan } from "@/lib/types";
 import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
 import { STORY_EDITOR_PROMPT_VERSION } from "@/server/story-editor-prompt";
+import { normalizeStoryProse } from "@/lib/story-prose";
 
 export const maxDuration = 180;
 
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
       schema: SEASON_RESULT_SCHEMA,
     });
     if (result.ok) {
-      const story = rewriteNodeIds(result.data.nodes, crypto.randomUUID().slice(0, 8));
+      const story = normalizeStoryProse(rewriteNodeIds(result.data.nodes, crypto.randomUUID().slice(0, 8)));
       const storyBible = {
         ...baseBible,
         openThreads: result.data.plan.items.slice(1).map((item) => ({
@@ -75,7 +76,7 @@ export async function POST(request: Request) {
   }
 
   // Safe-template fallback: identical to the pre-LLM behavior, plus a plan derived from the template chapters.
-  const story = base.nodes.map((node, index) => ({
+  const story = normalizeStoryProse(base.nodes.map((node, index) => ({
     ...node,
     id: `custom-${index + 1}`,
     illustration: undefined,
@@ -84,7 +85,7 @@ export async function POST(request: Request) {
       ? `${character.name}正在经历：${character.dilemma}。现实没有立刻给出答案，故事会从她已有的资源、关系和限制开始，而不是靠巧合替她解决问题。`
       : node.scene.replace(/林澈/g, character.name),
     choices: node.choices?.map((choice, choiceIndex) => addFallbackCausality({ ...choice, id: `custom-${index + 1}-${choiceIndex}` })),
-  }));
+  })));
   const plan: StoryPlan = {
     chapters: 5,
     items: [...new Set(story.map((node) => node.chapter))]
