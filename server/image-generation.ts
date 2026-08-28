@@ -66,25 +66,15 @@ async function portraitReference(portraitId: number): Promise<string | null> {
   const relativePath = portrait.src.replace(/^\//, "");
   if (!relativePath.startsWith("images/")) return null;
 
-  // Avoid embedding a 2–3 MB portrait in every request. Preview deployments can
-  // be protected from external fetchers, so use the exact public Git commit via
-  // jsDelivr when Vercel supplies repository metadata. Local development keeps
-  // the Base64 fallback.
-  const repositoryOwner = process.env.VERCEL_GIT_REPO_OWNER;
-  const repositorySlug = process.env.VERCEL_GIT_REPO_SLUG;
-  const commitSha = process.env.VERCEL_GIT_COMMIT_SHA;
-  if (repositoryOwner && repositorySlug && commitSha) {
-    return `https://cdn.jsdelivr.net/gh/${repositoryOwner}/${repositorySlug}@${commitSha}/public/${relativePath}`;
-  }
-
-  const deploymentHost = process.env.VERCEL_URL;
-  if (deploymentHost) return `https://${deploymentHost}/${relativePath}`;
+  // Wan may not be able to fetch Vercel preview or overseas CDN URLs from the
+  // model's region. Use the bundled, model-only JPEG reference instead: it is
+  // roughly 30–45 KB rather than the 2–3 MB display portrait, so Base64 upload
+  // remains fast and does not depend on an externally reachable asset host.
+  const referencePath = relativePath.replace(/\.png$/i, "-wan-reference.jpg");
 
   try {
-    const data = await readFile(path.join(process.cwd(), "public", relativePath));
-    const extension = path.extname(relativePath).slice(1).toLowerCase();
-    const mime = extension === "jpg" || extension === "jpeg" ? "image/jpeg" : "image/png";
-    return `data:${mime};base64,${data.toString("base64")}`;
+    const data = await readFile(path.join(process.cwd(), "public", referencePath));
+    return `data:image/jpeg;base64,${data.toString("base64")}`;
   } catch {
     return null;
   }
@@ -129,10 +119,7 @@ export async function generateStoryIllustration(input: IllustrationInput): Promi
       "X-DashScope-Async": "enable",
     },
     body: requestBody,
-    // Base64 reference portraits make task submission slower than text-only
-    // requests; allow enough time to upload while staying well below Vercel's
-    // function ceiling.
-    signal: AbortSignal.timeout(60_000),
+    signal: AbortSignal.timeout(30_000),
   }).catch(() => null);
   if (!submitted) return providerFailure(null, 0);
 
