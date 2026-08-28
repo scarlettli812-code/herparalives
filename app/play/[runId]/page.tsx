@@ -16,15 +16,23 @@ const sumChapter = (records: ChoiceRecord[]) => records.reduce<StatDelta>((sum, 
 const iosDevice = () => /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const scrollToTop = () => { const ios = iosDevice(); window.setTimeout(() => { if (ios) window.scrollTo(0, 0); else window.scrollTo({ top: 0, behavior: "smooth" }); }, 60); };
 
-function SceneArtwork({ src, alt }: { src: string; alt: string }) {
+function SceneArtwork({ src, alt, generated }: { src: string; alt: string; generated: boolean }) {
   if (/^https?:\/\//.test(src)) {
     // Wan result URLs are signed and hostnames vary by region, so they cannot be
     // safely enumerated in next/image remotePatterns.
     // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt={alt} />;
+    return <img className={generated ? "generated-scene-image" : undefined} src={src} alt={alt} />;
   }
-  return <Image src={src} alt={alt} fill priority sizes="(max-width: 760px) 100vw, 52vw" />;
+  return <Image className={generated ? "generated-scene-image" : undefined} src={src} alt={alt} fill priority sizes="(max-width: 760px) 100vw, 52vw" />;
 }
+
+type ChapterResponse = {
+  story?: StoryNode[];
+  callbacks?: StoryCallback[];
+  provider?: "bailian" | "safe-template";
+  fallbackReason?: string;
+  error?: string;
+};
 
 export default function PlayPage() {
   const id = String(useParams().runId); const router = useRouter(); const [run, setRun] = useState<GameRun>();
@@ -34,8 +42,8 @@ export default function PlayPage() {
   // Prefetch the next chapter while the player is still reading the current one's
   // final node — the chapter is usually ready by the time they click through, so
   // the perceived wait drops to ~0. Still exactly one generation per chapter.
-  const prefetchRef = useRef<{ chapter: number; finalNodeId: string; stateVersion: number; story: StoryNode[]; callbacks: StoryCallback[] } | null>(null);
-  const prefetchPromiseRef = useRef<Promise<{ chapter: number; finalNodeId: string; stateVersion: number; story: StoryNode[]; callbacks: StoryCallback[] } | null> | null>(null);
+  const prefetchRef = useRef<{ chapter: number; finalNodeId: string; stateVersion: number; story: StoryNode[]; callbacks: StoryCallback[]; provider: "bailian" | "safe-template"; fallbackReason?: string } | null>(null);
+  const prefetchPromiseRef = useRef<Promise<{ chapter: number; finalNodeId: string; stateVersion: number; story: StoryNode[]; callbacks: StoryCallback[]; provider: "bailian" | "safe-template"; fallbackReason?: string } | null> | null>(null);
   const illustrationRequestsRef = useRef(new Set<number>());
   const lastIndexRef = useRef(0);
   useEffect(() => setRun(getRun(id)), [id]);
@@ -63,9 +71,9 @@ export default function PlayPage() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ character: run.character, preferences: run.character.storyPreferences, plan: run.plan, targetChapter: target, memory: run.choices, lastNode, story: nodes, storyBible: run.storyBible, storyState: run.storyState, eventLedger: run.eventLedger }),
         });
-        const result = await response.json() as { story?: StoryNode[]; callbacks?: StoryCallback[] };
+        const result = await response.json() as ChapterResponse;
         if (!response.ok || !result.story?.length) return null;
-        const entry = { chapter: target, finalNodeId: lastNode.id, stateVersion, story: result.story, callbacks: result.callbacks ?? [] };
+        const entry = { chapter: target, finalNodeId: lastNode.id, stateVersion, story: result.story, callbacks: result.callbacks ?? [], provider: result.provider ?? "bailian", fallbackReason: result.fallbackReason };
         prefetchRef.current = entry;
         return entry;
       } catch {
@@ -141,7 +149,7 @@ export default function PlayPage() {
       updatedAt: Date.now(),
     };
     prefetchRef.current = null;
-    saveRun(withChoice); setRun(withChoice); setSelectedChoiceId(selected.id);
+    saveRun(withChoice); setRun(withChoice); setSelectedChoiceId(selected.id); setContinueError("");
     window.setTimeout(() => { const el = document.getElementById("choice-outcome"); if (el) { if (iosDevice()) el.scrollIntoView(); else el.scrollIntoView({ behavior: "smooth", block: "start" }); } }, 50);
   };
   const storyChapterCount = nodes.length ? Math.max(...nodes.map((node) => node.chapter)) : 0;
@@ -177,17 +185,23 @@ export default function PlayPage() {
         const targetChapter = storyChapterCount + 1;
         let newNodes: StoryNode[] | null = null;
         let callbacks: StoryCallback[] = [];
+        let provider: "bailian" | "safe-template" = "bailian";
+        let fallbackReason: string | undefined;
         const stateVersion = run.stateVersion ?? run.choices.length;
         const cached = prefetchRef.current;
         if (cached?.chapter === targetChapter && cached.finalNodeId === current.id && cached.stateVersion === stateVersion) {
           newNodes = cached.story;
           callbacks = cached.callbacks;
+          provider = cached.provider;
+          fallbackReason = cached.fallbackReason;
           prefetchRef.current = null;
         } else if (prefetchPromiseRef.current) {
           const entry = await prefetchPromiseRef.current;
           if (entry?.chapter === targetChapter && entry.finalNodeId === current.id && entry.stateVersion === stateVersion) {
             newNodes = entry.story;
             callbacks = entry.callbacks;
+            provider = entry.provider;
+            fallbackReason = entry.fallbackReason;
             prefetchRef.current = null;
           }
         }
@@ -197,10 +211,12 @@ export default function PlayPage() {
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ character: run.character, preferences: run.character.storyPreferences, plan: run.plan, targetChapter, memory: run.choices, lastNode: current, story: nodes, storyBible: run.storyBible, storyState: run.storyState, eventLedger: run.eventLedger }),
           });
-          const result = await response.json() as { story?: StoryNode[]; callbacks?: StoryCallback[] };
-          if (!response.ok || !result.story?.length) throw new Error("generate_failed");
+          const result = await response.json() as ChapterResponse;
+          if (!response.ok || !result.story?.length) throw new Error(result.error || "generate_failed");
           newNodes = result.story;
           callbacks = result.callbacks ?? [];
+          provider = result.provider ?? "bailian";
+          fallbackReason = result.fallbackReason;
         }
         const appended = [...nodes, ...newNodes];
         const visited = run.visitedNodeIds?.length ? run.visitedNodeIds : nodes.slice(0, run.currentIndex + 1).map((node) => node.id);
@@ -211,7 +227,12 @@ export default function PlayPage() {
           currentNodeId: newNodes[0].id,
           visitedNodeIds: [...visited, ...newNodes.map((node) => node.id)],
           eventLedger: realizeEvents(run.eventLedger ?? [], callbacks, targetChapter),
-          generation: run.generation ? { ...run.generation, stage: "ready" } : undefined,
+          generation: {
+            ...run.generation,
+            stage: provider === "safe-template" ? "fallback" : "ready",
+            source: provider,
+            fallbackReason,
+          },
           finished: false,
           updatedAt: Date.now(),
         };
@@ -252,7 +273,7 @@ export default function PlayPage() {
       : current.visual?.status === "failed"
         ? "AI 插图生成失败 · 暂用所选立绘"
         : "AI 正在按本章情节生成插图 · 暂用所选立绘";
-  return <main className="play-page"><AppHeader compact /><div className="chapter-progress"><span>{current.chapterTitle} · 第 {sceneInChapter} 幕</span><div>{chapterNumbers.map((chapter) => <i className={chapter <= current.chapter ? "active" : ""} key={chapter} />)}</div><Link href={`/map/${run.id}`}>查看人生地图</Link></div><section className="story-stage"><div className="scene-art illustrated"><SceneArtwork src={sceneArt} alt={`${current.title}手绘剧情场景`} /><div className="scene-vignette" /><small>{artCaption}</small></div><article className="story-panel">{previous && run.currentIndex > 0 && <p className="memory-echo">人物记得：{previous.memory}</p>}<p className="scene-count">{chapterLabel} · SCENE {sceneInChapter}</p><h1>{current.title}</h1><ScrollRevealText className="scene-text rich-scene" text={current.scene} />{current.dialogue && <blockquote>{current.dialogue}</blockquote>}{!resolvedChoice && (current.choices?.length ?? 0) > 0 && <div className="choices"><p>故事走到这里，{run.character.name}准备如何回应？</p>{(current.choices ?? []).map((item, index) => <button onClick={() => choose(index)} key={item.id}><b>{String.fromCharCode(65 + index)}</b><span><strong>{item.label}</strong><small>{item.hint}</small></span><em>→</em></button>)}</div>}
+  return <main className="play-page"><AppHeader compact /><div className="chapter-progress"><span>{current.chapterTitle} · 第 {sceneInChapter} 幕</span><div>{chapterNumbers.map((chapter) => <i className={chapter <= current.chapter ? "active" : ""} key={chapter} />)}</div><Link href={`/map/${run.id}`}>查看人生地图</Link></div><section className="story-stage"><div className={`scene-art illustrated${generatedArt ? " has-generated-art" : ""}`}><SceneArtwork src={sceneArt} alt={`${current.title}手绘剧情场景`} generated={Boolean(generatedArt)} /><div className="scene-vignette" /><small>{artCaption}</small></div><article className="story-panel">{run.generation?.stage === "fallback" && <p className="chapter-fallback-note">本次 AI 内容未通过检查，已切换到可继续游玩的安全版本。{run.generation.fallbackReason ? ` ${run.generation.fallbackReason}` : ""}</p>}{previous && run.currentIndex > 0 && <p className="memory-echo">人物记得：{previous.memory}</p>}<p className="scene-count">{chapterLabel} · SCENE {sceneInChapter}</p><h1>{current.title}</h1><ScrollRevealText className="scene-text rich-scene" text={current.scene} />{current.dialogue && <blockquote>{current.dialogue}</blockquote>}{!resolvedChoice && (current.choices?.length ?? 0) > 0 && <div className="choices"><p>故事走到这里，{run.character.name}准备如何回应？</p>{(current.choices ?? []).map((item, index) => <button onClick={() => choose(index)} key={item.id}><b>{String.fromCharCode(65 + index)}</b><span><strong>{item.label}</strong><small>{item.hint}</small></span><em>→</em></button>)}</div>}
     {resolvedChoice && <section className="inline-outcome" id="choice-outcome"><p className="eyebrow">YOUR CHOICE · {resolvedChoice.label}</p><h2>选择之后，生活继续发生</h2><ScrollRevealText className="outcome-story" text={resolvedChoice.outcome} /><div className="consequence-grid"><div><small>获得</small><p>{resolvedChoice.gain}</p></div><div><small>代价</small><p>{resolvedChoice.cost}</p></div><div><small>仍然未知</small><p>{resolvedChoice.unknown}</p></div></div></section>}
     {current.chapterEnd && <section className="inline-coach"><p className="eyebrow">{chapterLabel} · LIFE COACH</p><h3>这一章，先在这里停一下</h3><p className="chapter-summary">以下五维只记录本章变化，不代表选择的好坏。</p><div className="delta-row">{Object.entries(chapterDeltas).filter(([, value]) => value).map(([key, value]) => <span key={key}><b>{statLabels[key]}</b><em className={(value || 0) > 0 ? "up" : "down"}>{(value || 0) > 0 ? "+" : ""}{value}</em></span>)}</div><div className="coach"><small>章末镜面 · 不替你决定</small><p>{current.coach}</p></div><small className="no-rank">Coach 从本章经历中提出问题，不提供标准答案。</small></section>}
     {continueError && <p className="continue-error">{continueError}</p>}

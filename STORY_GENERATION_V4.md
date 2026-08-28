@@ -6,7 +6,7 @@
 |---|---|---|
 | 每个选择绑定 2–3 个 story variables | `StoryChoice.effects`，维度为 `career / economy / relationship / selfFulfillment` | 任一 AI 选择的 `effects.length` 为 2–3 |
 | 后文记住前面的选择 | 选择写入 `StoryState` 与 `StoryEvent`；续章收到完整 `StoryBible + StoryState + eventLedger + choices` | 后续章节至少返回 1 个 pending `eventId` 的 callback |
-| 后果必须明确出现 | `State Validator` 要求 callback 的 `evidence` 原样存在于本章正文或 outcome，逾期事件不得遗漏 | 删除证据或填入未知 ID 时，续章接口返回 `continuity_failed` |
+| 后果必须明确出现 | `State Validator` 要求 callback 的 `evidence` 原样存在于本章正文或 outcome，逾期事件不得遗漏 | AI 结果未通过时不展示，改用带明确标记的因果安全续章 |
 | 分支缓存不串线 | 章末有选择时，选完才预生成；缓存同时校验 `finalNodeId + stateVersion` | 回溯换选项后不会使用旧分支章节 |
 | 用户知道 AI 是否成功 | `/prepare` 显示生成、校验、ready、fallback、failed；fallback 显示原因 | 断开模型后明确显示安全模板，不冒充 AI 结果 |
 | 插图跟随实时情节和所选立绘 | 自定义故事每章调用 Wan 2.7，输入为所选立绘 Base64 + 本章场景 | 图注显示 AI 实时章节插图；失败时显示所选立绘而非固定角色图 |
@@ -22,7 +22,7 @@ flowchart TD
   D --> E[故事 + callbacks]
   E --> F[State Validator]
   F -->|通过| G[显示并兑现事件]
-  F -->|失败| H[显示重试状态]
+  F -->|失败| H[透明安全续章]
 ```
 
 ### Story State
@@ -63,7 +63,7 @@ Validator 会拒绝不存在的事件、重复事件、正文中找不到的证�
 4. `fallback`：AI 未配置或没有通过结构/因果检查，已明确切换安全模板。
 5. `failed`：请求本身未完成，保留角色卡并提供重试。
 
-所有严格 JSON 生成显式设置 `enable_thinking=false`，避免把请求预算消耗在用户不可见的思考内容上。首章生成使用 120 秒、单次尝试的硬预算，输出最多 2800 tokens：首次只返回五章简要大纲与一个可玩的关键决策场景；玩家做出选择后，后续章节恢复完整叙事密度。模型超时后，接口会在 Vercel 300 秒截止前返回透明标记的安全模板，不再因第二次长重试被平台终止为 504。后续章节允许两次 110 秒尝试，总预算仍保留平台响应余量。
+所有严格 JSON 生成显式设置 `enable_thinking=false`，避免把请求预算消耗在用户不可见的思考内容上。首章生成使用 120 秒、单次尝试的硬预算，输出最多 2800 tokens：首次只返回五章简要大纲与一个可玩的关键决策场景；玩家做出选择后，后续章节恢复完整叙事密度。模型超时后，接口会在 Vercel 300 秒截止前返回透明标记的安全模板，不再因第二次长重试被平台终止为 504。后续章节允许两次 110 秒尝试，总预算仍保留平台响应余量；两次都失败或因果校验未通过时，服务端按当前 Story State、上一选择和待兑现事件构造透明标记的安全续章，玩家不会卡在章末。
 
 ## 插图策略
 
@@ -96,10 +96,10 @@ node scripts/e2e-llm.mjs
 | 场景 | 期望结果 |
 |---|---|
 | 未配置 `DASHSCOPE_API_KEY` | 首章使用安全模板，页面显示 fallback 与原因 |
-| 文本模型超时或 JSON 不合法 | 首章在 120 秒预算后透明降级，不产生 Vercel 504；续章不吞错，显示重试 |
-| callback ID 不在账本 | 续章返回 `continuity_failed` |
-| callback evidence 不在正文 | 续章返回 `continuity_failed` |
-| 逾期事件未 callback | 续章返回 `continuity_failed` |
+| 文本模型超时或 JSON 不合法 | 首章和续章都透明降级，不产生 Vercel 504，也不阻断下一章 |
+| callback ID 不在账本 | AI 结果不展示，返回带原因提示的安全续章 |
+| callback evidence 不在正文 | AI 结果不展示，返回带原因提示的安全续章 |
+| 逾期事件未 callback | AI 结果不展示，安全续章按账本补齐到期 callback |
 | 章末选择前停留 | 不启动下一章预生成 |
 | 回溯后选择另一项 | 截断旧的自定义未来章节，重建 state/ledger 后重新生成 |
 | Wan 未配置、超时或响应无图片 | 故事继续可玩，显示所选立绘及失败图注 |

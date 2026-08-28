@@ -8,6 +8,7 @@ import {
 } from "@/server/story-generation";
 import { attachCallbackIds, validateChapterContinuity } from "@/server/state-validator";
 import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
+import { buildSafeChapter } from "@/server/chapter-fallback";
 import type {
   CharacterCard,
   ChoiceRecord,
@@ -41,8 +42,6 @@ export async function POST(request: Request) {
   if (!targetChapter || targetChapter < 2 || targetChapter > plan.chapters) return NextResponse.json({ error: "章节号超出范围" }, { status: 400 });
   const lastNode = body.lastNode;
   if (!lastNode) return NextResponse.json({ error: "缺少上一章节点" }, { status: 400 });
-  if (!llmConfigured()) return NextResponse.json({ error: "no_key" }, { status: 503 });
-
   const memory = body.memory ?? [];
   const storySoFar = body.story?.length ? body.story : [lastNode];
   const lastChoiceRecord = [...memory].reverse()[0];
@@ -56,6 +55,24 @@ export async function POST(request: Request) {
   const storyState = body.storyState ?? body.storyBible?.worldState ?? createInitialStoryState();
   const storyBible = body.storyBible ?? createInitialStoryBible(character, storyState);
   const eventLedger = body.eventLedger ?? [];
+  const safeResponse = (fallbackReason: string) => {
+    const fallback = buildSafeChapter({
+      character,
+      plan,
+      targetChapter,
+      lastNode,
+      lastChoice: lastChoiceRecord,
+      lastOutcome: lastChoiceInNode?.outcome,
+      storyState,
+      eventLedger,
+    });
+    return NextResponse.json({
+      ...fallback,
+      provider: "safe-template",
+      fallbackReason,
+    });
+  };
+  if (!llmConfigured()) return safeResponse("故事生成服务暂时不可用");
   const prompt = buildChapterPrompt({
     character,
     constraints: character.promptConstraints ?? [],
@@ -80,11 +97,11 @@ export async function POST(request: Request) {
     enableThinking: false,
     schema: CHAPTER_RESULT_SCHEMA,
   });
-  if (!result.ok) return NextResponse.json({ error: "generate_failed" }, { status: 502 });
+  if (!result.ok) return safeResponse(`AI 续章生成失败：${result.error.code}`);
 
   let story = rewriteNodeIds(result.data.story, crypto.randomUUID().slice(0, 8));
   if (story.some((node) => node.chapter !== targetChapter)) {
-    return NextResponse.json({ error: "generate_failed" }, { status: 502 });
+    return safeResponse("AI 续章的章节编号未通过检查");
   }
   const last = story[story.length - 1];
   // The client only appends what this route returns, so mutating in place is safe.
@@ -108,8 +125,8 @@ export async function POST(request: Request) {
   });
   if (!validation.ok) {
     console.error(`[chapters] continuity validation failed: ${validation.errors.join(" | ")}`);
-    return NextResponse.json({ error: "continuity_failed", details: validation.errors }, { status: 502 });
+    return safeResponse("AI 续章没有通过因果连续性检查");
   }
   story = attachCallbackIds(story, result.data.callbacks);
-  return NextResponse.json({ story, callbacks: result.data.callbacks });
+  return NextResponse.json({ story, callbacks: result.data.callbacks, provider: "bailian" });
 }

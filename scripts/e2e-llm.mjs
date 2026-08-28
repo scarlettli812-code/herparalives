@@ -125,10 +125,10 @@ async function main() {
     await page.waitForFunction(() => document.querySelector(".scene-art small")?.textContent?.includes("AI 实时章节插图"), { timeout: 30000 });
     log("play: CHAPTER 1 renders with 5-dot progress");
 
-    // ---- negative path: mock down BEFORE the chapter-1 final node renders ----
-    // The play page only prefetches after the chapter-final choice is recorded.
-    // Kill the mock before that choice so the retry state is deterministic.
-    log("negative: kill mock before chapter-1 final node, expect retry state");
+    // ---- provider failure: mock down before chapter-1 ends ----
+    // A provider outage must no longer strand the player at the chapter boundary.
+    // The route returns a transparent, causally-grounded safe chapter instead.
+    log("provider failure: kill mock before chapter-1 ends, expect safe chapter");
     await page.click(".choices button");
     await page.waitForSelector("#choice-outcome");
     const firstLabel = await page.$eval(".story-continue", (button) => button.textContent.trim());
@@ -141,24 +141,21 @@ async function main() {
     const chapter1Label = await page.$eval(".story-continue", (button) => button.textContent.trim());
     assert(chapter1Label === "生成下一章，继续故事", `expected generate label, got "${chapter1Label}"`);
     await page.click(".story-continue");
-    await page.waitForSelector(".continue-error", { timeout: 20000 });
-    const retryLabel = await page.$eval(".story-continue", (button) => button.textContent.trim());
-    assert(retryLabel === "重试生成下一章", `expected retry label, got "${retryLabel}"`);
-    log("negative path OK (error shown, no crash)");
-
-    // ---- retry: mock back up ----
-    log("retry: restart mock and continue to chapter 2");
-    mock.spawn();
-    await mock.waitUp();
-    await page.click(".story-continue");
     await page.waitForFunction(() => document.querySelector(".scene-count")?.textContent?.includes("CHAPTER 2"), { timeout: 30000 });
-    assert(chapterRequests >= 1, "no POST /api/chapters/generate captured");
+    await page.waitForSelector(".chapter-fallback-note", { timeout: 30000 });
     const realized = await page.evaluate(() => {
       const runs = JSON.parse(localStorage.getItem("parallel-her:runs") || "[]");
       return runs[0]?.eventLedger?.some((event) => event.status === "realized");
     });
-    assert(realized, "chapter 2 did not realize any pending causal event");
-    log(`retry OK → CHAPTER 2 (${chapterRequests} generation request(s))`);
+    assert(realized, "safe chapter did not realize any pending causal event");
+    log("safe chapter OK (provider failure did not block chapter 2)");
+
+    // ---- provider recovery ----
+    log("restart mock for later chapters");
+    mock.spawn();
+    await mock.waitUp();
+    assert(chapterRequests >= 1, "no POST /api/chapters/generate captured");
+    log(`provider recovered after ${chapterRequests} chapter request(s)`);
 
     // ---- chapters 2 → 5 ----
     for (const chapter of [2, 3, 4]) {
