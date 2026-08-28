@@ -1,8 +1,7 @@
 // Mock DashScope OpenAI-compatible endpoint for local E2E verification.
 // Usage: node scripts/mock-dashscope.mjs [port]
-// The dev server points text and image generation at this process:
+// The dev server points text generation at this process:
 // LLM_BASE_URL=http://127.0.0.1:8787/v1
-// DASHSCOPE_IMAGE_ENDPOINT=http://127.0.0.1:8787/api/v1/services/aigc/multimodal-generation/generation
 // DASHSCOPE_API_KEY=mock
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -100,9 +99,6 @@ const server = createServer(async (req, res) => {
   };
   if (req.method === "GET" && url.pathname === "/v1/models") {
     return send(200, { object: "list", data: [{ id: "qwen-mock", object: "model" }] });
-  }
-  if (req.method === "POST" && url.pathname === "/api/v1/services/aigc/multimodal-generation/generation") {
-    return send(200, { output: { choices: [{ message: { content: [{ type: "image", image: "http://localhost:3000/images/linan-ch1-v1.png" }] } }], finished: true } });
   }
   if (req.method !== "POST" || url.pathname !== "/v1/chat/completions") {
     return send(404, { error: { message: "not found" } });

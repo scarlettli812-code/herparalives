@@ -77,16 +77,6 @@ export type GenerationMeta = {
   lastError?: string;
 };
 
-export type StoryVisual = {
-  referencePortraitId: number;
-  visualBrief: string;
-  status: "pending" | "generating" | "ready" | "failed";
-  provider?: "wan" | "static";
-  url?: string;
-  expiresAt?: number;
-  error?: string;
-};
-
 export type StoryChoice = {
   id: string;
   label: string;
@@ -115,7 +105,6 @@ export type StoryNode = {
   coach?: string;
   chapterEnd?: boolean;
   illustration?: string;
-  visual?: StoryVisual;
   causedByEventIds?: string[];
   // Pure narration nodes have no choices — decisions only appear at key forks.
   choices?: StoryChoice[];

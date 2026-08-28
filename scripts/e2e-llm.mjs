@@ -2,7 +2,7 @@
 //
 // Setup:
 //   Terminal 1: node scripts/mock-dashscope.mjs
-//   Terminal 2: LLM_BASE_URL=http://127.0.0.1:8787/v1 DASHSCOPE_IMAGE_ENDPOINT=http://127.0.0.1:8787/api/v1/services/aigc/multimodal-generation/generation DASHSCOPE_API_KEY=mock pnpm dev
+//   Terminal 2: LLM_BASE_URL=http://127.0.0.1:8787/v1 DASHSCOPE_API_KEY=mock pnpm dev
 //   Terminal 3: node scripts/e2e-llm.mjs
 //
 // The script spawns its own mock server on port 8787, so Terminal 1 is optional —
@@ -122,8 +122,9 @@ async function main() {
     assert(dotCount === 5, `expected 5 chapter-progress dots, got ${dotCount}`);
     const activeDots = await page.$$eval(".chapter-progress i.active", (dots) => dots.length);
     assert(activeDots === 1, `expected 1 active dot, got ${activeDots}`);
-    await page.waitForFunction(() => document.querySelector(".scene-art small")?.textContent?.includes("AI 实时章节插图"), { timeout: 30000 });
-    log("play: CHAPTER 1 renders with 5-dot progress");
+    const artCaption = await page.$eval(".scene-art small", (el) => el.textContent);
+    assert(artCaption.includes("所选角色立绘"), `unexpected custom-story art caption: ${artCaption}`);
+    log("play: CHAPTER 1 renders with stable selected portrait and 5-dot progress");
 
     // ---- provider failure: mock down before chapter-1 ends ----
     // A provider outage must no longer strand the player at the chapter boundary.

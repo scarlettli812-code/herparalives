@@ -1,6 +1,6 @@
 import type { GameRun } from "@/lib/types";
 
-type Job = { id: string; status: "queued" | "running" | "completed" | "failed"; type: "story" | "image"; createdAt: number };
+type Job = { id: string; status: "queued" | "running" | "completed" | "failed"; type: "story"; createdAt: number };
 
 const globalRuntime = globalThis as typeof globalThis & { __parallelHerRuns?: Map<string, GameRun>; __parallelHerJobs?: Map<string, Job>; __parallelHerIdempotency?: Set<string> };
 export const runtimeRuns = globalRuntime.__parallelHerRuns ||= new Map<string, GameRun>();
