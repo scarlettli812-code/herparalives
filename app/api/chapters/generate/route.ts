@@ -6,7 +6,7 @@ import {
   buildMemorySummary,
   rewriteNodeIds,
 } from "@/server/story-generation";
-import { attachCallbackIds, validateChapterContinuity } from "@/server/state-validator";
+import { alignCallbackEvidence, attachCallbackIds, validateChapterContinuity } from "@/server/state-validator";
 import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
 import { buildSafeChapter } from "@/server/chapter-fallback";
 import type {
@@ -118,9 +118,10 @@ export async function POST(request: Request) {
             return rest;
           });
   }
+  const callbacks = alignCallbackEvidence(story, result.data.callbacks);
   const validation = validateChapterContinuity({
     story,
-    callbacks: result.data.callbacks,
+    callbacks,
     eventLedger,
     targetChapter,
   });
@@ -128,6 +129,6 @@ export async function POST(request: Request) {
     console.error(`[chapters] continuity validation failed: ${validation.errors.join(" | ")}`);
     return safeResponse("AI 续章没有通过因果连续性检查");
   }
-  story = attachCallbackIds(story, result.data.callbacks);
-  return NextResponse.json({ story, callbacks: result.data.callbacks, provider: "bailian" });
+  story = attachCallbackIds(story, callbacks);
+  return NextResponse.json({ story, callbacks, provider: "bailian" });
 }

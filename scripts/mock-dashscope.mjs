@@ -48,7 +48,9 @@ const addProviderShapeDrift = (payload) => {
       choice.deltas.economy = "1";
     }
   }
-  for (const callback of copy.callbacks ?? []) callback.evidence = [callback.evidence];
+  for (const callback of copy.callbacks ?? []) {
+    callback.evidence = [{ quote: callback.evidence.split("").join(" ") }];
+  }
   return copy;
 };
 
