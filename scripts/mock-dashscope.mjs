@@ -35,6 +35,23 @@ const addCausality = (payload) => {
   return copy;
 };
 
+// Reproduce harmless format drift observed in real qwen-plus continuation
+// responses. The production parser should normalize these fields without
+// downgrading an otherwise valid chapter to the safe template.
+const addProviderShapeDrift = (payload) => {
+  const copy = JSON.parse(JSON.stringify(payload));
+  for (const node of copy.story ?? []) {
+    for (const choice of node.choices ?? []) {
+      choice.deltas = Object.fromEntries(
+        Object.entries(choice.deltas ?? {}).map(([key, value]) => [key, String(value)]),
+      );
+      choice.deltas.economy = "1";
+    }
+  }
+  for (const callback of copy.callbacks ?? []) callback.evidence = [callback.evidence];
+  return copy;
+};
+
 const pendingEventsFromPrompt = (user) => {
   const match = user.match(/因果事件账本[^：]*：\n([\s\S]*?)\n\n请输出 JSON/);
   if (!match) return [];
@@ -75,6 +92,7 @@ const server = createServer(async (req, res) => {
     fixtureContent = addCausality(JSON.parse(JSON.stringify(CHAPTER_2), (key, value) => (key === "chapter" ? chapter : value)));
     const evidence = fixtureContent.story[0].scene.slice(0, 28);
     fixtureContent.callbacks = pendingEventsFromPrompt(user).slice(0, 6).map((event) => ({ eventId: event.id, evidence }));
+    fixtureContent = addProviderShapeDrift(fixtureContent);
   } else fixtureContent = addCausality(SEASON);
   if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
   send(200, { choices: [{ message: { role: "assistant", content: JSON.stringify(fixtureContent) } }] });

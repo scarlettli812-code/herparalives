@@ -148,7 +148,10 @@ export async function chatJSON<T>(system: string, user: string, opts?: ChatOpts<
       const payload = JSON.parse(response.text) as { choices?: { message?: { content?: string } }[] };
       const content = payload.choices?.[0]?.message?.content;
       if (!content) throw new Error("empty content");
-      const data = JSON.parse(content) as T;
+      // The retry path may deliberately disable response_format for models that
+      // reject or distort nested JSON. Accept fenced JSON or a short prose wrapper
+      // there instead of failing a recoverable second response.
+      const data = parseContent(content) as T;
       if (opts?.schema) {
         const parsed = opts.schema.safeParse(data);
         if (!parsed.success) {

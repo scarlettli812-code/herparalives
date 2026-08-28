@@ -19,14 +19,45 @@ import { STORY_EDITOR_PROMPT } from "@/server/story-editor-prompt";
 export const STAT_KEYS = ["career", "wisdom", "happiness", "relationship", "courage"] as const;
 
 const EMPTY_DELTAS = {} as Record<(typeof STAT_KEYS)[number], number>;
-// zod4 z.record(keyEnum, value) treats every enum key as required, so values must
-// be optional — partial deltas are the norm, and unknown keys are still rejected.
+// qwen occasionally serializes score deltas as numeric strings and mixes the
+// narrative domains (economy/selfFulfillment) into this UI-only score object.
+// Keep the causal effects strict, but normalize this non-authoritative display
+// metadata so a complete, valid chapter is not discarded for "1" vs 1.
+function normalizeDeltas(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return EMPTY_DELTAS;
+  const source = value as Record<string, unknown>;
+  return Object.fromEntries(STAT_KEYS.flatMap((key) => {
+    const raw = source[key];
+    if (raw === null || raw === undefined || raw === "") return [];
+    const parsed = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isFinite(parsed)) return [];
+    return [[key, Math.max(-3, Math.min(3, Math.round(parsed)))]];
+  }));
+}
+
 // qwen-family models emit JSON null for absent optional fields, so optional
 // fields must be nullish (accept null) and normalized to undefined for the TS types.
 const nullable = <T extends z.ZodType>(schema: T) => schema.nullish().transform((v) => v ?? undefined);
 const deltasSchema = z
-  .record(z.enum(STAT_KEYS), nullable(z.number().int().min(-3).max(3)))
+  .preprocess(normalizeDeltas, z.partialRecord(z.enum(STAT_KEYS), z.number().int().min(-3).max(3)))
   .default(EMPTY_DELTAS);
+
+function normalizeCallbackEvidence(value: unknown): unknown {
+  let evidence = value;
+  if (Array.isArray(evidence)) {
+    evidence = evidence
+      .map((item) => normalizeCallbackEvidence(item))
+      .find((item) => typeof item === "string");
+  } else if (evidence && typeof evidence === "object") {
+    const record = evidence as Record<string, unknown>;
+    evidence = normalizeCallbackEvidence(record.evidence ?? record.quote ?? record.text);
+  }
+  if (typeof evidence !== "string") return evidence;
+  // The continuity validator still requires this exact excerpt to exist in the
+  // generated prose. The wider cap prevents an arbitrary length overrun from
+  // throwing away the whole chapter while bounding what is stored in the ledger.
+  return evidence.trim().slice(0, 300);
+}
 
 const storyDomainSchema = z.enum(["career", "economy", "relationship", "selfFulfillment"]);
 const storyEffectSchema = z.object({
@@ -114,7 +145,7 @@ export const CHAPTER_RESULT_SCHEMA = z
     story: z.array(nodeSchema).min(2).max(3),
     callbacks: z.array(z.object({
       eventId: z.string().min(1),
-      evidence: z.string().min(4).max(120),
+      evidence: z.preprocess(normalizeCallbackEvidence, z.string().min(4).max(300)),
     }).strict()).max(6),
   })
   .refine(hasDecisionNode, { message: "each chapter must include a decision node" });
@@ -271,11 +302,11 @@ export function buildChapterPrompt(input: ChapterInput): { system: string; user:
     isFinal
       ? `4. 本章是第 ${input.plan.chapters} 章（最终章）：所有选项禁止出现 nextNodeId；若最后一个节点带选项，其全部选项必须带 "endsStory": true，为整季收束——给出有分量的结局与 Life Coach 回望。`
       : `4. 本章不是最终章：所有选项禁止出现 endsStory 字段。`,
-    `5. 因果兑现：事件账本中 status=pending 的选择不能被忽略。每章至少明确兑现 1 个 pending 事件；所有 dueByChapter 小于等于本章的事件都必须在正文或 outcome 里明确出现。把兑现结果写入顶层 callbacks，eventId 必须原样复制，evidence 必须是从本章正文或 outcome 原样复制的 4—120 字证据；相关节点的 causedByEventIds 也要列出这些 eventId。`,
+    `5. 因果兑现：事件账本中 status=pending 的选择不能被忽略。每章至少明确兑现 1 个 pending 事件；所有 dueByChapter 小于等于本章的事件都必须在正文或 outcome 里明确出现。把兑现结果写入顶层 callbacks，eventId 必须原样复制，evidence 必须是从本章正文或 outcome 原样复制的 4—120 字单个字符串（禁止数组或对象）；相关节点的 causedByEventIds 也要列出这些 eventId。`,
     `6. 输出格式：只输出 JSON，顶层只允许 "story" 与 "callbacks" 两个键，禁止添加其他键。严格按下面的格式示例输出（示例中的"（…）"占位文字只是说明，实际内容必须完整真实；示例的 chapter 为 1，本次输出每个节点的 chapter 必须全部等于 ${input.targetChapter}；第一个示例是纯叙事节点——没有 choices 字段，第二个示例是抉择节点）：`,
     `   { "story": [ ${EXAMPLE_PLAIN_NODE}, ${EXAMPLE_NODE} ], "callbacks": [ { "eventId": "（账本中的原始ID）", "evidence": "（从本章内容原样复制的证据）" } ] }`,
     `7. 新选择也必须绑定 2—3 个 effects（career / economy / relationship / selfFulfillment），并给出 pathType、expectedConsequence 与 1—3 章内的 consequenceDueInChapters。`,
-    `8. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
+    `8. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；deltas 只能使用 career / wisdom / happiness / relationship / courage 五个键且值必须是数字，禁止写 economy / selfFulfillment；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
     `9. 正文要求：scene 写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
   ].join("\n");
   const user = [
