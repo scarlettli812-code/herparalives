@@ -1,11 +1,7 @@
 import "server-only";
 import type { StoryCallback, StoryEvent, StoryNode } from "@/lib/types";
 
-export type ContinuityValidation =
-  | { ok: true; callbackEventIds: string[] }
-  | { ok: false; errors: string[] };
-
-function storyText(nodes: StoryNode[]): string {
+export function storyText(nodes: StoryNode[]): string {
   return nodes.flatMap((node) => [
     node.scene,
     node.dialogue ?? "",
@@ -19,10 +15,15 @@ const normalizeEvidenceText = (value: string) => value
   .replace(/[\p{P}\p{S}\s]+/gu, "")
   .toLowerCase();
 
-function evidenceAppearsInText(text: string, evidence: string): boolean {
+export function evidenceAppearsInText(text: string, evidence: string): boolean {
+  if (evidence.trim().length < 4) return false;
   if (text.includes(evidence)) return true;
   const normalizedEvidence = normalizeEvidenceText(evidence);
   return normalizedEvidence.length >= 4 && normalizeEvidenceText(text).includes(normalizedEvidence);
+}
+
+export function evidenceAppearsInStory(nodes: StoryNode[], evidence: string): boolean {
+  return evidenceAppearsInText(storyText(nodes), evidence);
 }
 
 function evidenceSegments(nodes: StoryNode[]): string[] {
@@ -58,7 +59,7 @@ function evidenceSimilarity(left: string, right: string): number {
 /**
  * Qwen may copy a genuine prose excerpt with different quote marks/spacing, or
  * lightly paraphrase the same sentence. Align only high-confidence matches back
- * to a literal sentence so the hard continuity validator still checks real text.
+ * to a literal sentence so event bookkeeping can cite the real generated prose.
  */
 export function alignCallbackEvidence(nodes: StoryNode[], callbacks: StoryCallback[]): StoryCallback[] {
   const generatedText = storyText(nodes);
@@ -75,36 +76,23 @@ export function alignCallbackEvidence(nodes: StoryNode[], callbacks: StoryCallba
 }
 
 /**
- * Deterministic guardrail for generated chapters. The model must cite literal
- * evidence from its own prose, and overdue events cannot silently disappear.
+ * Model callback metadata is advisory. Keep only known event IDs backed by a
+ * literal sentence, but never reject a complete chapter because the model
+ * paraphrased or malformed this technical bookkeeping field.
  */
-export function validateChapterContinuity(input: {
-  story: StoryNode[];
-  callbacks: StoryCallback[];
-  eventLedger: StoryEvent[];
-  targetChapter: number;
-}): ContinuityValidation {
-  const errors: string[] = [];
-  const pending = input.eventLedger.filter((event) => event.status === "pending");
-  const pendingById = new Map(pending.map((event) => [event.id, event]));
-  const callbackIds = new Set<string>();
-  const generatedText = storyText(input.story);
-
-  for (const callback of input.callbacks) {
-    if (callbackIds.has(callback.eventId)) errors.push(`重复兑现事件：${callback.eventId}`);
-    callbackIds.add(callback.eventId);
-    if (!pendingById.has(callback.eventId)) errors.push(`兑现了不存在或已结束的事件：${callback.eventId}`);
-    if (!evidenceAppearsInText(generatedText, callback.evidence)) errors.push(`兑现证据未出现在故事正文：${callback.eventId}`);
-  }
-
-  if (pending.length && input.callbacks.length === 0) {
-    errors.push("存在待兑现事件，但本章没有 callbacks");
-  }
-  for (const event of pending.filter((item) => item.dueByChapter <= input.targetChapter)) {
-    if (!callbackIds.has(event.id)) errors.push(`逾期事件未兑现：${event.id}`);
-  }
-
-  return errors.length ? { ok: false, errors } : { ok: true, callbackEventIds: [...callbackIds] };
+export function sanitizeCallbacks(
+  nodes: StoryNode[],
+  callbacks: StoryCallback[],
+  eventLedger: StoryEvent[],
+): StoryCallback[] {
+  const pendingIds = new Set(eventLedger.filter((event) => event.status === "pending").map((event) => event.id));
+  const seen = new Set<string>();
+  return alignCallbackEvidence(nodes, callbacks).filter((callback) => {
+    if (!pendingIds.has(callback.eventId) || seen.has(callback.eventId)) return false;
+    if (!evidenceAppearsInStory(nodes, callback.evidence)) return false;
+    seen.add(callback.eventId);
+    return true;
+  });
 }
 
 export function attachCallbackIds(nodes: StoryNode[], callbacks: StoryCallback[]): StoryNode[] {

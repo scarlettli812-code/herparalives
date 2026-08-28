@@ -6,7 +6,8 @@ import {
   buildMemorySummary,
   rewriteNodeIds,
 } from "@/server/story-generation";
-import { alignCallbackEvidence, attachCallbackIds, validateChapterContinuity } from "@/server/state-validator";
+import { attachCallbackIds, sanitizeCallbacks } from "@/server/state-validator";
+import { auditNarrativeContinuity, buildRouteContract } from "@/server/route-continuity";
 import { createInitialStoryBible, createInitialStoryState } from "@/lib/story-state";
 import { buildSafeChapter } from "@/server/chapter-fallback";
 import type {
@@ -55,6 +56,7 @@ export async function POST(request: Request) {
   const storyState = body.storyState ?? body.storyBible?.worldState ?? createInitialStoryState();
   const storyBible = body.storyBible ?? createInitialStoryBible(character, storyState);
   const eventLedger = body.eventLedger ?? [];
+  const routeContract = buildRouteContract(memory, storySoFar);
   const safeResponse = (fallbackReason: string) => {
     const fallback = buildSafeChapter({
       character,
@@ -82,6 +84,7 @@ export async function POST(request: Request) {
     storyBible,
     storyState,
     eventLedger,
+    routeContract,
     lastNode,
     lastChoice: lastChoiceRecord
       ? { choiceLabel: lastChoiceRecord.choiceLabel, memory: lastChoiceRecord.memory }
@@ -118,17 +121,25 @@ export async function POST(request: Request) {
             return rest;
           });
   }
-  const callbacks = alignCallbackEvidence(story, result.data.callbacks);
-  const validation = validateChapterContinuity({
+  const modelCallbacks = sanitizeCallbacks(story, result.data.callbacks, eventLedger);
+  const audit = await auditNarrativeContinuity({
     story,
-    callbacks,
+    routeContract,
+    storyBible,
+    storyState,
     eventLedger,
     targetChapter,
+    latestEventId: lastChoiceRecord?.eventId,
   });
-  if (!validation.ok) {
-    console.error(`[chapters] continuity validation failed: ${validation.errors.join(" | ")}`);
-    return safeResponse("AI 续章没有通过因果连续性检查");
+  if (audit.softWarnings.length) {
+    console.warn(`[chapters] continuity soft warning: ${audit.softWarnings.join(" | ")}`);
   }
+  if (audit.hardFailures.length) {
+    console.error(`[chapters] route continuity failed: ${audit.hardFailures.join(" | ")}`);
+    return safeResponse("AI 续章与已经做出的选择发生了冲突");
+  }
+  const callbacks = [...audit.callbacks, ...modelCallbacks]
+    .filter((callback, index, list) => list.findIndex((item) => item.eventId === callback.eventId) === index);
   story = attachCallbackIds(story, callbacks);
   return NextResponse.json({ story, callbacks, provider: "bailian" });
 }

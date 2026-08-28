@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import type { RouteContract } from "@/server/route-continuity";
 import type {
   CharacterCard,
   ChoiceRecord,
@@ -248,6 +249,8 @@ const SEASON_TASK = [
   `  "nodes": [ ${EXAMPLE_SEASON_NODE} ]`,
   `}`,
   `【首章低延迟规则】nodes 必须恰好 1 个抉择节点，带 2—3 个真正改变方向、代价、关系或价值取舍的选项；禁止在先做哪件事、买不买东西、回不回消息等无关细节上设置选择。`,
+  `【五次选择路径】第一章是“本能与核心冲突”：选项要让玩家第一次暴露她更想保护什么。整季后续依次走向边界表达、代价落地、受挫修正和现实承诺；五章不能重复询问同一个问题。`,
+  `【选项中立】每个选项都必须有真实获得、现实代价与尚未确定的部分，不得设置明显正确答案、道德高地或纯粹逃避项。选项代表不同价值排序，不代表好坏。`,
   `【类型铁律】每个值必须保持自己的类型：plan.items 的每一项必须是对象；deltas 必须是对象；scene、outcome、label 等必须是字符串。严禁把对象或数组压缩成 "chapter: 1, title: …" 这样的字符串。节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
   `【节点规则】唯一节点的 chapter 必须为 1、chapterEnd 必须为 true，并带 20 字以上的 coach；所有选项禁止出现 nextNodeId 字段；deltas 使用 career / wisdom / happiness / relationship / courage 五个键，值为 -3 到 3 的整数，未变化的维度可省略。`,
   `【因果规则】每个选项必须绑定 2—3 个 effects，domain 只能是 career / economy / relationship / selfFulfillment；同时给出 pathType、expectedConsequence 和 1—3 章内兑现期限。effects.to 必须写成选择后已经成立的具体状态，consequence 必须能在后续场景中被角色行动、对话或资源变化明确证明。`,
@@ -284,6 +287,7 @@ export type ChapterInput = {
   storyBible: StoryBible;
   storyState: StoryState;
   eventLedger: StoryEvent[];
+  routeContract: RouteContract;
   lastNode: StoryNode;
   lastChoice: Pick<ChoiceRecord, "choiceLabel" | "memory">;
   lastOutcome: string;
@@ -291,23 +295,32 @@ export type ChapterInput = {
 
 export function buildChapterPrompt(input: ChapterInput): { system: string; user: string } {
   const isFinal = input.targetChapter === input.plan.chapters;
+  const decisionStage = ({
+    2: "边界表达：她怎样向重要的人说明需求、限制与责任",
+    3: "代价落地：当时间、金钱、关系或机会成本真的出现，她还愿意承担什么",
+    4: "受挫修正：现实不如预期时，她怎样调整而不偷偷否定之前的选择",
+    5: "现实承诺：没有完美答案时，她最终愿意保护什么并承担什么",
+  } as Record<number, string>)[input.targetChapter] ?? "继续深化价值取舍";
   const system = [
     STORY_EDITOR_PROMPT,
     ``,
     `【本次任务】为已进行到第 ${input.targetChapter - 1} 章的《她的平行人生》续写第 ${input.targetChapter} 章（整季共 ${input.plan.chapters} 章）。本季故事大纲与已发生事件将在用户消息中给出。`,
     `【承接规则】`,
-    `1. 用户消息中的 Story Bible、当前 Story State、因果事件账本和已发生事件共同构成唯一事实来源：人物身份、关系、职业/经济/家庭状态、时间线必须与之一致，严禁出现与已选路线矛盾的事实（例如玩家拒绝了经济帮助，后续不得默认"她已接受帮助"）。`,
-    `2. 开头必须自然衔接上一章结尾的场景与人物情绪，至少引用一次玩家上次选择的记忆内容。`,
-    `3. 节点类型：本章输出 2—3 个节点，构成完整章节弧线，其中纯叙事节点（没有 choices 字段，只推进场景与情绪）与抉择节点（带 2—3 个选项）混合，每章必须至少包含 1 个抉择节点；选项只出现在真正的关键抉择点——方向选择、代价交换、关系转折、价值观取舍，禁止在无关紧要的细节上设置选项。最后一个节点 chapterEnd 必须为 true 且带 20 字以上的 coach；若它带选项，其全部选项禁止出现 nextNodeId。`,
+    `1. 用户消息中的“玩家路线合同”是最高优先级事实：selected 已经发生，必须保留其行动、即时结果和新状态；unselected 从未发生，严禁把其行动或结果写成历史。Story Bible、当前 Story State、因果事件账本和已发生事件同样不可改写。`,
+    `2. 人物以后可以改变主意，但必须完整写出新信息或压力如何出现、人物怎样重新决定、改变带来什么代价。不得用一句话跳过过程，更不能把上一章未选择的路线倒写成已经发生。`,
+    `3. 开头必须自然衔接上一章结尾和玩家刚做出的选择。承接不是复述记忆，而是让选择通过行动、对话、时间、金钱、关系或资源变化进入生活。`,
+    `4. 本章承担五次选择路径中的“${decisionStage}”。新选择必须比上一章更深入，推动玩家继续辨认价值排序、边界、恐惧和愿意承担的代价，不能换皮重复上一题。`,
+    `5. 节点类型：本章输出 2—3 个节点，构成完整章节弧线，其中纯叙事节点（没有 choices 字段，只推进场景与情绪）与抉择节点（带 2—3 个选项）混合，每章必须至少包含 1 个抉择节点；每个选项都必须同时有真实获得、现实代价和不确定性，不得设置明显正确答案。最后一个节点 chapterEnd 必须为 true 且带 20 字以上的 coach；若它带选项，其全部选项禁止出现 nextNodeId。`,
     isFinal
-      ? `4. 本章是第 ${input.plan.chapters} 章（最终章）：所有选项禁止出现 nextNodeId；若最后一个节点带选项，其全部选项必须带 "endsStory": true，为整季收束——给出有分量的结局与 Life Coach 回望。`
-      : `4. 本章不是最终章：所有选项禁止出现 endsStory 字段。`,
-    `5. 因果兑现：事件账本中 status=pending 的选择不能被忽略。每章至少明确兑现 1 个 pending 事件；所有 dueByChapter 小于等于本章的事件都必须在正文或 outcome 里明确出现。把兑现结果写入顶层 callbacks，eventId 必须原样复制，evidence 必须是从本章正文或 outcome 原样复制的 4—120 字单个字符串（禁止数组或对象）；相关节点的 causedByEventIds 也要列出这些 eventId。`,
-    `6. 输出格式：只输出 JSON，顶层只允许 "story" 与 "callbacks" 两个键，禁止添加其他键。严格按下面的格式示例输出（示例中的"（…）"占位文字只是说明，实际内容必须完整真实；示例的 chapter 为 1，本次输出每个节点的 chapter 必须全部等于 ${input.targetChapter}；第一个示例是纯叙事节点——没有 choices 字段，第二个示例是抉择节点）：`,
+      ? `6. 本章是第 ${input.plan.chapters} 章（最终章）：所有选项禁止出现 nextNodeId；若最后一个节点带选项，其全部选项必须带 "endsStory": true。coach 必须基于五次实际选择，指出核心冲突、反复模式、价值排序、可能的盲点和一个可执行的小步骤；不得输出“勇敢做自己”等空泛建议。`
+      : `6. 本章不是最终章：所有选项禁止出现 endsStory 字段。`,
+    `7. 因果兑现：事件账本中 status=pending 的选择不能被忽略。到期事件必须通过角色行动、对话、资源或关系变化产生现实后果，不能只复述“人物记得”。把已经真实发生的后果写入 callbacks；eventId 原样复制，evidence 尽量从本章正文或 outcome 原样复制。evidence 的格式错误由服务端修复，不得为凑证据编造剧情。`,
+    `8. 输出格式：只输出 JSON，顶层只允许 "story" 与 "callbacks" 两个键，禁止添加其他键。严格按下面的格式示例输出（示例中的"（…）"占位文字只是说明，实际内容必须完整真实；示例的 chapter 为 1，本次输出每个节点的 chapter 必须全部等于 ${input.targetChapter}；第一个示例是纯叙事节点——没有 choices 字段，第二个示例是抉择节点）：`,
     `   { "story": [ ${EXAMPLE_PLAIN_NODE}, ${EXAMPLE_NODE} ], "callbacks": [ { "eventId": "（账本中的原始ID）", "evidence": "（从本章内容原样复制的证据）" } ] }`,
-    `7. 新选择也必须绑定 2—3 个 effects（career / economy / relationship / selfFulfillment），并给出 pathType、expectedConsequence 与 1—3 章内的 consequenceDueInChapters。`,
-    `8. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；deltas 只能使用 career / wisdom / happiness / relationship / courage 五个键且值必须是数字，禁止写 economy / selfFulfillment；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
-    `9. 正文要求：scene 写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
+    `9. 新选择也必须绑定 2—3 个 effects（career / economy / relationship / selfFulfillment），并给出 pathType、expectedConsequence 与 1—3 章内的 consequenceDueInChapters。effects.to 必须是选择后已经成立、后文不得无故推翻的具体事实。`,
+    `10. 类型铁律：每个值必须保持自己的类型，严禁把对象或数组压缩成 "key: value" 字符串；deltas 只能使用 career / wisdom / happiness / relationship / courage 五个键且值必须是数字，禁止写 economy / selfFulfillment；节点对象只允许示例中的键，禁止把"场景建立""人物互动""冲突升级"等叙事分节名称当作 JSON 键。`,
+    `11. 现实规则：时间、金钱、身体、职场权力和人际关系都必须遵守常识。任何机会、原谅、升职、离职、和解或资源变化都要有过程，不能用巧合或突然出现的贵人无代价解决。`,
+    `12. 正文要求：scene 写 350—800 字完整场景，outcome 写 180—450 字完整选后剧情；禁止缩写或提纲式输出。`,
   ].join("\n");
   const user = [
     `角色卡：`,
@@ -338,6 +351,9 @@ export function buildChapterPrompt(input: ChapterInput): { system: string; user:
     ``,
     `当前 Story State（后文必须从这些状态继续）：`,
     JSON.stringify(input.storyState, null, 2),
+    ``,
+    `玩家路线合同（selected 已发生；unselected 是禁止串入的未选路线）：`,
+    JSON.stringify(input.routeContract, null, 2),
     ``,
     `因果事件账本（pending 事件必须按期限兑现）：`,
     JSON.stringify(input.eventLedger, null, 2),

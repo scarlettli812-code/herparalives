@@ -116,7 +116,57 @@ try {
   assert(deltas.length > 0, "generated chapter has no decisions");
   assert(deltas.every((item) => !("economy" in item)), "unknown delta keys were not removed");
   assert(deltas.every((item) => Object.values(item).every((value) => typeof value === "number")), "delta values were not normalized to numbers");
-  console.log("SCHEMA REGRESSION PASSED: provider=bailian, chapter=2, callbacks and deltas normalized");
+
+  const contradictionEvent = {
+    ...event,
+    id: "event-route-contradiction",
+    choiceLabel: "TEST_ROUTE_CONTRADICTION：不提交PPT",
+  };
+  const contradictionResponse = await fetch(`http://127.0.0.1:${APP_PORT}/api/chapters/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      character: {
+        id: "route-regression",
+        name: "若岚",
+        portrait: 0,
+        background: "六年外贸跟单经历，部门裁撤后正在寻找新的职业方向。",
+        goal: "找到可持续且保留自主权的职业道路",
+        resources: ["行业经验", "客户关系"],
+        dilemma: "稳定收入与职业成长难以兼得",
+        isCustom: true,
+        promptConstraints: [],
+      },
+      plan: season.plan,
+      targetChapter: 2,
+      memory: [{
+        nodeId: lastNode.id,
+        sourceChapter: 1,
+        choiceId: choice.id,
+        choiceLabel: contradictionEvent.choiceLabel,
+        memory: "她决定不提交PPT，并承担由此产生的职业后果。",
+        deltas: choice.deltas,
+        eventId: contradictionEvent.id,
+        effects,
+        expectedConsequence: contradictionEvent.expectedConsequence,
+        dueByChapter: 2,
+        at: Date.now(),
+      }],
+      lastNode,
+      story: [lastNode],
+      eventLedger: [contradictionEvent],
+      storyState: {
+        career: "已经决定不提交PPT",
+        economy: "现金流紧张",
+        relationship: "保有行业联系",
+        selfFulfillment: "愿意承担拒绝提交的后果",
+      },
+    }),
+  });
+  const contradictionData = await contradictionResponse.json();
+  assert(contradictionData.provider === "safe-template", "an explicit A/B route contradiction was not blocked");
+  assert(contradictionData.fallbackReason?.includes("已经做出的选择"), "route contradiction fallback reason was not user-facing");
+  console.log("CONTINUITY REGRESSION PASSED: metadata drift is repaired and explicit A/B branch switching is blocked");
 } finally {
   app.kill("SIGTERM");
   mock.kill("SIGTERM");

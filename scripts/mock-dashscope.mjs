@@ -49,7 +49,10 @@ const addProviderShapeDrift = (payload) => {
     }
   }
   for (const callback of copy.callbacks ?? []) {
-    callback.evidence = [{ quote: callback.evidence.split("").join(" ") }];
+    // This intentionally paraphrases rather than copying the prose. The old
+    // validator discarded the whole chapter here; the route audit must recover
+    // real evidence without treating this technical field as a story failure.
+    callback.evidence = [{ quote: `事件 ${callback.eventId} 已经在本章以另一种说法产生影响` }];
   }
   return copy;
 };
@@ -62,6 +65,31 @@ const pendingEventsFromPrompt = (user) => {
   } catch {
     return [];
   }
+};
+
+const auditPayload = (user) => {
+  const eventMatch = user.match(/待兑现事件：\n([\s\S]*?)\n\n需要检查的新章节：/);
+  const storyMatch = user.match(/需要检查的新章节：\n([\s\S]*?)\n\n输出：/);
+  let events = [];
+  let story = [];
+  try { events = eventMatch ? JSON.parse(eventMatch[1]) : []; } catch {}
+  try { story = storyMatch ? JSON.parse(storyMatch[1]) : []; } catch {}
+  const evidence = story[0]?.scene?.slice(0, 80) ?? "";
+  if (user.includes("TEST_ROUTE_CONTRADICTION")) {
+    const contradiction = "她按未选择的路线提交了PPT。";
+    return {
+      eventChecks: events.map((event) => ({ eventId: event.id, status: "contradicted", evidence: contradiction, reason: "正文写成了未选择的提交路线" })),
+      routeViolations: [{ type: "unchosen_branch", evidence: contradiction, reason: "玩家没有选择提交PPT，正文却写成已经提交" }],
+      choiceDepth: "substantive",
+      progressionNote: "选项涉及现实代价",
+    };
+  }
+  return {
+    eventChecks: events.map((event) => ({ eventId: event.id, status: "realized", evidence, reason: "选择已经通过本章行动产生后果" })),
+    routeViolations: [],
+    choiceDepth: "substantive",
+    progressionNote: "选项继续深化价值取舍",
+  };
 };
 
 const server = createServer(async (req, res) => {
@@ -84,7 +112,8 @@ const server = createServer(async (req, res) => {
   const body = JSON.parse(raw);
   const user = body.messages?.find((message) => message.role === "user")?.content ?? "";
   let fixtureContent;
-  if (user.includes("用户的处境原文")) fixtureContent = CHARACTER;
+  if (user.includes("【因果审校任务】")) fixtureContent = auditPayload(user);
+  else if (user.includes("用户的处境原文")) fixtureContent = CHARACTER;
   else if (user.includes("整季大纲")) {
     // Chapter continuation: remap the chapter-2 fixture to the requested chapter
     // number so the same shape serves chapters 2..5. The route itself forces
@@ -92,6 +121,9 @@ const server = createServer(async (req, res) => {
     const match = user.match(/第\s*(\d+)\s*章的节点/);
     const chapter = match ? Number(match[1]) : 2;
     fixtureContent = addCausality(JSON.parse(JSON.stringify(CHAPTER_2), (key, value) => (key === "chapter" ? chapter : value)));
+    if (user.includes("TEST_ROUTE_CONTRADICTION")) {
+      fixtureContent.story[0].scene = `她按未选择的路线提交了PPT。${fixtureContent.story[0].scene}`;
+    }
     const evidence = fixtureContent.story[0].scene.slice(0, 28);
     fixtureContent.callbacks = pendingEventsFromPrompt(user).slice(0, 6).map((event) => ({ eventId: event.id, evidence }));
     fixtureContent = addProviderShapeDrift(fixtureContent);

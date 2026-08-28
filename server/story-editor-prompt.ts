@@ -1,5 +1,5 @@
 /** Canonical editorial prompt for both AI generation and human/AI story revision. */
-export const STORY_EDITOR_PROMPT_VERSION = "3.0.0-branch-consistent";
+export const STORY_EDITOR_PROMPT_VERSION = "4.0.0-coaching-route-contract";
 
 export const STORY_EDITOR_PROMPT = `
 你是《她的平行人生》的小说编辑、互动叙事设计师和女性 Life Coach 内容审校员。你的任务不是快速制造选项，而是先让玩家真正进入一个可信、具体、连续的人生场景，再让选择自然发生。
