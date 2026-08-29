@@ -36,7 +36,15 @@ export async function POST(request: Request) {
   let generated: { name: string; background: string; dilemma: string; goal: string; resources: string[] } | undefined;
   if (llmConfigured()) {
     const prompt = buildCharacterCardPrompt({ name: String(body.name || ""), situation, preferences: storyPreferences });
-    const result = await chatJSON(prompt.system, prompt.user, { model: structuredModel(), temperature: 0.6, schema: CHARACTER_CARD_SCHEMA });
+    const result = await chatJSON(prompt.system, prompt.user, {
+      model: structuredModel(),
+      temperature: 0.6,
+      maxTokens: 800,
+      timeoutMs: 45_000,
+      maxAttempts: 1,
+      enableThinking: false,
+      schema: CHARACTER_CARD_SCHEMA,
+    });
     if (result.ok) generated = result.data;
   }
   // LLM fields are filled field-by-field from the classifier buckets instead of falling back wholesale,

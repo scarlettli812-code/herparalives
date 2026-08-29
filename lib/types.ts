@@ -2,6 +2,81 @@ export type StatKey = "career" | "wisdom" | "happiness" | "relationship" | "cour
 
 export type StatDelta = Partial<Record<StatKey, number>>;
 
+export type StoryDomain = "career" | "economy" | "relationship" | "selfFulfillment";
+
+export type StoryEffect = {
+  domain: StoryDomain;
+  from?: string;
+  to: string;
+  consequence: string;
+};
+
+export type StoryPathType = "local" | "branch" | "delay" | "exit" | "evidence";
+
+export type StoryState = Record<StoryDomain, string>;
+
+export type StoryEvent = {
+  id: string;
+  sourceNodeId: string;
+  sourceChoiceId: string;
+  sourceChapter: number;
+  choiceLabel: string;
+  effects: StoryEffect[];
+  expectedConsequence: string;
+  dueByChapter: number;
+  status: "pending" | "realized";
+  realizedInChapter?: number;
+  realizedEvidence?: string;
+};
+
+export type StoryCallback = {
+  eventId: string;
+  evidence: string;
+};
+
+export type StoryCharacterFact = {
+  id: string;
+  name: string;
+  role: string;
+  goal: string;
+  boundary: string;
+};
+
+export type StoryThread = {
+  id: string;
+  description: string;
+  dueByChapter: number;
+  status: "open" | "resolved" | "dropped";
+};
+
+export type StoryBible = {
+  version: 1;
+  protagonistId: string;
+  characters: StoryCharacterFact[];
+  worldState: StoryState;
+  timeline: string[];
+  invariants: string[];
+  openThreads: StoryThread[];
+};
+
+export type GenerationStage =
+  | "idle"
+  | "planning"
+  | "writing"
+  | "validating"
+  | "repairing"
+  | "ready"
+  | "fallback"
+  | "failed";
+
+export type GenerationMeta = {
+  stage: GenerationStage;
+  source: "bailian" | "safe-template" | "preset";
+  promptVersion?: string;
+  fallbackReason?: string;
+  lastError?: string;
+};
+
 export type StoryChoice = {
   id: string;
   label: string;
@@ -12,6 +87,10 @@ export type StoryChoice = {
   outcome: string;
   deltas: StatDelta;
   memory: string;
+  effects?: StoryEffect[];
+  pathType?: StoryPathType;
+  expectedConsequence?: string;
+  consequenceDueInChapters?: number;
   nextNodeId?: string;
   endsStory?: boolean;
 };
@@ -26,6 +105,7 @@ export type StoryNode = {
   coach?: string;
   chapterEnd?: boolean;
   illustration?: string;
+  causedByEventIds?: string[];
   // Pure narration nodes have no choices — decisions only appear at key forks.
   choices?: StoryChoice[];
 };
@@ -63,16 +143,28 @@ export type StoryPreferences = {
   realism: number;
 };
 
-export type StoryPlanItem = { chapter: number; title: string; synopsis: string };
+export type StoryPlanItem = {
+  chapter: number;
+  title: string;
+  synopsis: string;
+  chapterFunction?: string;
+  setupThreadIds?: string[];
+  payoffThreadIds?: string[];
+};
 
 export type StoryPlan = { chapters: number; items: StoryPlanItem[] };
 
 export type ChoiceRecord = {
   nodeId: string;
+  sourceChapter?: number;
   choiceId: string;
   choiceLabel: string;
   memory: string;
   deltas: StatDelta;
+  eventId?: string;
+  effects?: StoryEffect[];
+  expectedConsequence?: string;
+  dueByChapter?: number;
   at: number;
 };
 
@@ -86,6 +178,11 @@ export type GameRun = {
   currentNodeId?: string;
   visitedNodeIds?: string[];
   choices: ChoiceRecord[];
+  storyBible?: StoryBible;
+  storyState?: StoryState;
+  eventLedger?: StoryEvent[];
+  stateVersion?: number;
+  generation?: GenerationMeta;
   branch: number;
   createdAt: number;
   updatedAt: number;
